@@ -12,7 +12,7 @@ public class Debug {
 
 	// A flag to control logging. Set this to 'false' to disable DEBUG logs.
 	// The 'final' keyword means this value can't be changed after it's set.
-	public static final boolean ENABLE_DEBUG = true;
+	public static final boolean ENABLE_DEBUG = false;
 
 	// Log levels can be used to control verbosity.
 	public static void log(String log) {

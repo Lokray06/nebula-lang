@@ -1,7 +1,6 @@
 parser grammar NebulaParser;
 
-@header
-{
+@header {
 package org.lokray.parser;
 }
 
@@ -83,8 +82,7 @@ parameterList
     ;
 
 parameter
-    :   type ID (QUESTION_MARK_SYM EQUALS_SYM expression)? // Optional parameter
-    |   ID COLON_SYM type (QUESTION_MARK_SYM EQUALS_SYM expression)? // Named parameter part
+    :   type ID (EQUALS_SYM expression)?
     ;
 
 // --- Statements ---
@@ -103,7 +101,7 @@ statement
     |   breakStatement
     |   continueStatement
     |   switchStatement
-    |   expression SEMI_SYM // Expression statement
+    |   expression SEMI_SYM
     ;
 
 variableDeclaration
@@ -115,28 +113,16 @@ ifStatement
     ;
 
 forStatement
-    // 1. NEW: Rule for the simplified for loop syntax.
-    // This is placed FIRST to be matched before the traditional loop.
-    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM statement
-      # SimplifiedFor
-
-    // 2. EXISTING: Rule for the traditional C-style for loop.
+    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM statement     # SimplifiedFor
     | FOR_KW L_PAREN_SYM (variableDeclaration | expression)? SEMI_SYM expression? SEMI_SYM expression? R_PAREN_SYM statement
-      # TraditionalFor
+                                                                    # TraditionalFor
     ;
 
-// NEW: This rule captures the different forms of your simplified loop condition.
 simplifiedForClause
-    // Matches: for (j = 5 < 15) or for (k = 0 <= 20)
-    : iter=ID EQUALS_SYM start=expression op=relationalOperator limit=expression
-      # SimplifiedForWithInitializer
-
-    // Matches: for (i < 10)
-    | iter=ID op=relationalOperator limit=expression
-      # SimplifiedForNoInitializer
+    : iter=ID EQUALS_SYM start=expression op=relationalOperator limit=expression # SimplifiedForWithInitializer
+    | iter=ID op=relationalOperator limit=expression                             # SimplifiedForNoInitializer
     ;
 
-// NEW: A helper rule to group the relational operators.
 relationalOperator
     : LESS_THAN_SYM
     | GREATER_THAN_SYM
@@ -172,7 +158,7 @@ switchBlock
     :   (CASE_KW expression | DEFAULT_KW) COLON_SYM statement*
     ;
 
-// --- Expressions (with precedence) ---
+// --- Expressions ---
 expression
     :   assignmentExpression
     ;
@@ -231,15 +217,15 @@ powerExpression
 
 unaryExpression
     :   (ADD_OP | SUB_OP | LOG_NOT_OP | BIT_NOT_OP) unaryExpression
-    |   L_PAREN_SYM type R_PAREN_SYM unaryExpression // Casting
+    |   L_PAREN_SYM type R_PAREN_SYM unaryExpression
     |   postfixExpression
     ;
 
 postfixExpression
     :   primary
-        (   DOT_SYM ID                                  // Member access
-        |   L_PAREN_SYM expressionList? R_PAREN_SYM     // Method call
-        |   L_BRACK_SYM expression R_BRACK_SYM          // Array access
+        ( DOT_SYM ID
+        | L_PAREN_SYM argumentList? R_PAREN_SYM
+        | L_BRACK_SYM expression R_BRACK_SYM
         )*
     ;
 
@@ -247,11 +233,16 @@ primary
     :   L_PAREN_SYM expression R_PAREN_SYM
     |   literal
     |   ID
-    |   NEW_KW type (L_PAREN_SYM expressionList? R_PAREN_SYM | L_BRACK_SYM expression R_BRACK_SYM)
+    |   NEW_KW type (L_PAREN_SYM argumentList? R_PAREN_SYM | L_BRACK_SYM expression R_BRACK_SYM)
     ;
 
-expressionList
-    :   expression (COMMA_SYM expression)*
+argumentList
+    :   expression (COMMA_SYM expression)* (COMMA_SYM namedArgument (COMMA_SYM namedArgument)*)?
+    |   namedArgument (COMMA_SYM namedArgument)*
+    ;
+
+namedArgument
+    :   ID COLON_SYM expression
     ;
 
 literal
@@ -263,7 +254,18 @@ literal
     |   BOOLEAN_LITERAL
     |   CHAR_LITERAL
     |   STRING_LITERAL
+    |   interpolatedString
     |   NULL_T
+    ;
+
+interpolatedString
+    :   INTERPOLATED_STRING_START interpolationPart* INTERPOLATION_END
+    ;
+
+interpolationPart
+    :   TEXT_FRAGMENT
+    |   ESCAPED_BRACE_INTERP
+    |   OPEN_BRACE_INTERP expression CLOSE_BRACE_INTERP
     ;
 
 assignmentOperator
