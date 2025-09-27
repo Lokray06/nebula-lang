@@ -19,13 +19,13 @@ public class AstBuilderVisitor extends NebulaParserBaseVisitor<Void> {
     @Override
     public Void visitClassDeclaration(NebulaParser.ClassDeclarationContext ctx) {
         String className = ctx.ID().getText();
-        Debug.log(getIndent() + "Entering Class: " + className);
+        Debug.logDebug(getIndent() + "Entering Class: " + className);
 
         indentLevel++;
         visitChildren(ctx); // Continue visiting children of this node
         indentLevel--;
 
-        Debug.log(getIndent() + "Exiting Class: " + className);
+        Debug.logDebug(getIndent() + "Exiting Class: " + className);
         return null; // Return null because our return type is Void
     }
 
@@ -33,7 +33,7 @@ public class AstBuilderVisitor extends NebulaParserBaseVisitor<Void> {
     public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx) {
         String methodName = ctx.ID().getText();
         String returnType = ctx.type().getText();
-        Debug.log(getIndent() + "Found Method: " + methodName + " with return type: " + returnType);
+        Debug.logDebug(getIndent() + "Found Method: " + methodName + " with return type: " + returnType);
 
         indentLevel++;
         // Here you would process parameters, then visit the method body (block)
@@ -49,7 +49,7 @@ public class AstBuilderVisitor extends NebulaParserBaseVisitor<Void> {
         // A single field declaration can declare multiple variables, e.g., "int x, y;"
         for (NebulaParser.VariableDeclaratorContext varCtx : ctx.variableDeclarator()) {
             String fieldName = varCtx.ID().getText();
-            Debug.log(getIndent() + "Found Field: " + fieldName + " of type: " + fieldType);
+            Debug.logDebug(getIndent() + "Found Field: " + fieldName + " of type: " + fieldType);
         }
         return visitChildren(ctx);
     }

@@ -24,13 +24,15 @@ public class Main
 
 			// 2. Validate file existence and extension
 			Path filePath = nebulaCompilerArguments.getFilePath();
+			String fileName = filePath.getFileName().toString();
+
 			if (!Files.exists(filePath))
 			{
 				Debug.logError("The specified file does not exist: " + filePath);
 				return;
 			}
 			nebulaCompilerArguments.validateFile();
-			Debug.logInfo("Successfully validated file: " + filePath);
+			Debug.logDebug("Successfully validated file: " + filePath);
 
 			// 3. Create a CharStream from the input file
 			CharStream input = CharStreams.fromFileName(filePath.toString());
@@ -48,15 +50,16 @@ public class Main
 			ParseTree tree = parser.compilationUnit();
 
 			// 8. Print the LISP-style parse tree for debugging
-			Debug.log("\n--- Parse Tree ---");
-			Debug.log(tree.toStringTree(parser));
-			Debug.log("--- End Parse Tree ---\n");
+			Debug.logDebug("\n--- Parse Tree ---");
+			Debug.logDebug(tree.toStringTree(parser));
+			Debug.logDebug("--- End Parse Tree ---\n");
+			Debug.logDebug("Parsed " + fileName + " without errors.");
 
 			// 9. Create a visitor to walk the parse tree and build the AST (or perform analysis)
-			Debug.logInfo("--- Walking Tree with Visitor ---");
+			Debug.logDebug("--- Walking Tree with Visitor ---");
 			AstBuilderVisitor visitor = new AstBuilderVisitor();
 			visitor.visit(tree);
-			Debug.logInfo("--- Visitor Finished ---");
+			Debug.logDebug("--- Visitor Finished ---");
 
 		}
 		catch (IllegalArgumentException e)

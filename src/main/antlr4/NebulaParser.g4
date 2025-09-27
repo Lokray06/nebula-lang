@@ -1,6 +1,7 @@
 parser grammar NebulaParser;
 
-@header {
+@header
+{
 package org.lokray.parser;
 }
 
@@ -158,7 +159,7 @@ switchBlock
     :   (CASE_KW expression | DEFAULT_KW) COLON_SYM statement*
     ;
 
-// --- Expressions ---
+// --- Expressions (with precedence) ---
 expression
     :   assignmentExpression
     ;
@@ -217,7 +218,7 @@ powerExpression
 
 unaryExpression
     :   (ADD_OP | SUB_OP | LOG_NOT_OP | BIT_NOT_OP) unaryExpression
-    |   L_PAREN_SYM type R_PAREN_SYM unaryExpression
+    |   L_PAREN_SYM type R_PAREN_SYM unaryExpression // Casting
     |   postfixExpression
     ;
 
@@ -229,22 +230,38 @@ postfixExpression
         )*
     ;
 
+// --- Primary: allow array initializer here as well ---
 primary
     :   L_PAREN_SYM expression R_PAREN_SYM
     |   literal
     |   ID
     |   NEW_KW type (L_PAREN_SYM argumentList? R_PAREN_SYM | L_BRACK_SYM expression R_BRACK_SYM)
+    |   arrayInitializer
     ;
 
+// An argument list that handles positional, named, and mixed arguments like C#.
 argumentList
     :   expression (COMMA_SYM expression)* (COMMA_SYM namedArgument (COMMA_SYM namedArgument)*)?
     |   namedArgument (COMMA_SYM namedArgument)*
     ;
 
+// A named argument is 'identifier: expression'
 namedArgument
     :   ID COLON_SYM expression
     ;
 
+// ---------------------- Array initializers ----------------------
+// Accepts nested initializers and optional trailing comma.
+arrayInitializer
+    :   L_CURLY_SYM ( arrayElement ( COMMA_SYM arrayElement )* )? ( COMMA_SYM )? R_CURLY_SYM
+    ;
+
+arrayElement
+    :   expression
+    |   arrayInitializer
+    ;
+
+// ---------------------- Literals ----------------------
 literal
     :   INTEGER_LITERAL
     |   LONG_LITERAL
@@ -268,6 +285,7 @@ interpolationPart
     |   OPEN_BRACE_INTERP expression CLOSE_BRACE_INTERP
     ;
 
+// ---------------------- Assignment Operators ----------------------
 assignmentOperator
     :   EQUALS_SYM
     |   ADD_OP_COMP
