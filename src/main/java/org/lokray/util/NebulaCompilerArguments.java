@@ -9,15 +9,26 @@ public class NebulaCompilerArguments
 {
 	private static final String IGNORE_EXTENSIONS_FLAG = "--ignore-file-extensions";
 	private static final String VERBOSE = "-v";
+	private static final String BUILD_NDK = "--build-ndk";
+	private static final String NDK_OUT = "--ndk-out";
+	private static final String USE_NDK = "--use-ndk";
+
 	private static final List<String> VALID_EXTENSIONS = Arrays.asList(".neb", ".nebproj");
 
 	private final Path filePath;
 	private final boolean ignoreExtension;
+	private final Path buildNdkPath; // optional
+	private final Path ndkOutPath;   // optional
+	private final Path useNdkPath;   // optional
 
-	private NebulaCompilerArguments(Path filePath, boolean ignoreExtension)
+	private NebulaCompilerArguments(Path filePath, boolean ignoreExtension,
+	                                Path buildNdkPath, Path ndkOutPath, Path useNdkPath)
 	{
 		this.filePath = filePath;
 		this.ignoreExtension = ignoreExtension;
+		this.buildNdkPath = buildNdkPath;
+		this.ndkOutPath = ndkOutPath;
+		this.useNdkPath = useNdkPath;
 	}
 
 	public static NebulaCompilerArguments parse(String[] args)
@@ -28,32 +39,57 @@ public class NebulaCompilerArguments
 			throw new IllegalArgumentException("Invalid number of arguments.");
 		}
 
-		String filePathString = null;
+		Path filePath = null;
 		boolean ignoreExtension = false;
+		Path buildNdk = null;
+		Path ndkOut = null;
+		Path useNdk = null;
 
-		for (String arg : args)
+		for (int i = 0; i < args.length; i++)
 		{
-			if (arg.equals(IGNORE_EXTENSIONS_FLAG))
+			String arg = args[i];
+			switch (arg)
 			{
-				ignoreExtension = true;
-			}
-			else if (arg.equals(VERBOSE))
-			{
-				Debug.ENABLE_DEBUG = true;
-			}
-			else
-			{
-				filePathString = arg;
+				case IGNORE_EXTENSIONS_FLAG -> ignoreExtension = true;
+				case VERBOSE -> Debug.ENABLE_DEBUG = true;
+				case BUILD_NDK ->
+				{
+					i++;
+					if (i >= args.length)
+					{
+						throw new IllegalArgumentException("Missing path after " + BUILD_NDK);
+					}
+					buildNdk = Paths.get(args[i]);
+				}
+				case NDK_OUT ->
+				{
+					i++;
+					if (i >= args.length)
+					{
+						throw new IllegalArgumentException("Missing path after " + NDK_OUT);
+					}
+					ndkOut = Paths.get(args[i]);
+				}
+				case USE_NDK ->
+				{
+					i++;
+					if (i >= args.length)
+					{
+						throw new IllegalArgumentException("Missing path after " + USE_NDK);
+					}
+					useNdk = Paths.get(args[i]);
+				}
+				default ->
+				{
+					if (filePath == null)
+					{
+						filePath = Paths.get(arg);
+					}
+				}
 			}
 		}
 
-		if (filePathString == null)
-		{
-			Debug.printUsage(args);
-			throw new IllegalArgumentException("File path not provided.");
-		}
-
-		return new NebulaCompilerArguments(Paths.get(filePathString), ignoreExtension);
+		return new NebulaCompilerArguments(filePath, ignoreExtension, buildNdk, ndkOut, useNdk);
 	}
 
 	public Path getFilePath()
@@ -66,8 +102,27 @@ public class NebulaCompilerArguments
 		return ignoreExtension;
 	}
 
+	public Path getBuildNdkPath()
+	{
+		return buildNdkPath;
+	}
+
+	public Path getNdkOutPath()
+	{
+		return ndkOutPath;
+	}
+
+	public Path getUseNdkPath()
+	{
+		return useNdkPath;
+	}
+
 	public void validateFile()
 	{
+		if (filePath == null)
+		{
+			return;
+		}
 		if (!shouldIgnoreExtension())
 		{
 			String fileExtension = FileUtils.getFileExtension(filePath);

@@ -4,8 +4,11 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.lokray.ndk.NdkCompiler;
+import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
+import org.lokray.semantic.SemanticAnalyzer;
 import org.lokray.util.Debug;
 import org.lokray.util.NebulaCompilerArguments;
 
@@ -19,64 +22,73 @@ public class Main
 	{
 		try
 		{
-			// 1. Orchestrate argument parsing and validation
-			NebulaCompilerArguments nebulaCompilerArguments = NebulaCompilerArguments.parse(args);
+			NebulaCompilerArguments arguments = NebulaCompilerArguments.parse(args);
+			Path ndkBuild = arguments.getBuildNdkPath();
+			Path ndkOut = arguments.getNdkOutPath();
+			Path useNdk = arguments.getUseNdkPath();
+			Path filePath = arguments.getFilePath();
 
-			// 2. Validate file existence and extension
-			Path filePath = nebulaCompilerArguments.getFilePath();
-			String fileName = filePath.getFileName().toString();
+			if (ndkBuild != null)
+			{
+				NdkCompiler nc = new NdkCompiler(ndkBuild);
+				LibraryDTO lib = nc.buildLibrary();
+				Path out = ndkOut != null ? ndkOut : ndkBuild.resolveSibling("ndk.neblib");
+				nc.writeLibrary(lib, out);
+				Path stub = out.getParent().resolve("nebula_runtime_stubs.c");
+				nc.emitRuntimeStub(lib, stub);
+				if (filePath == null)
+				{
+					return;
+				}
+			}
 
+			if (filePath == null)
+			{
+				Debug.logError("No file provided to compile.");
+				return;
+			}
 			if (!Files.exists(filePath))
 			{
 				Debug.logError("The specified file does not exist: " + filePath);
 				return;
 			}
-			nebulaCompilerArguments.validateFile();
-			Debug.logDebug("Successfully validated file: " + filePath);
+			arguments.validateFile();
 
-			// 3. Create a CharStream from the input file
 			CharStream input = CharStreams.fromFileName(filePath.toString());
-
-			// 4. Create a lexer that feeds off of the input CharStream
 			NebulaLexer lexer = new NebulaLexer(input);
-
-			// 5. Create a buffer of tokens pulled from the lexer
 			CommonTokenStream tokens = new CommonTokenStream(lexer);
-
-			// 6. Create a parser that feeds off the tokens buffer
 			NebulaParser parser = new NebulaParser(tokens);
-
-			// 7. Begin parsing at the 'compilationUnit' rule
 			ParseTree tree = parser.compilationUnit();
 
-			// 8. Print the LISP-style parse tree for debugging
-			Debug.logDebug("\n--- Parse Tree ---");
-			Debug.logDebug(tree.toStringTree(parser));
-			Debug.logDebug("--- End Parse Tree ---\n");
-			Debug.logDebug("Parsed " + fileName + " without errors.");
+			if (parser.getNumberOfSyntaxErrors() > 0)
+			{
+				Debug.logError("Compilation failed due to syntax errors.");
+				return;
+			}
 
-			// 9. Create a visitor to walk the parse tree and build the AST (or perform analysis)
-			Debug.logDebug("--- Walking Tree with Visitor ---");
-			AstBuilderVisitor visitor = new AstBuilderVisitor();
-			visitor.visit(tree);
-			Debug.logDebug("--- Visitor Finished ---");
+			SemanticAnalyzer analyzer = (useNdk != null) ? new SemanticAnalyzer(useNdk) : new SemanticAnalyzer();
+			boolean success = analyzer.analyze(tree);
 
+			if (!success)
+			{
+				Debug.logError("Compilation failed due to semantic errors.");
+				return;
+			}
+
+			Debug.logInfo("Semantic analysis passed successfully!");
+			Debug.logInfo("Next step would be Code Generation.");
 		}
 		catch (IllegalArgumentException e)
 		{
-			// Catches exceptions from argument parsing and validation
 			Debug.logError("Compiler initialization failed. Reason: " + e.getMessage());
 		}
 		catch (IOException e)
 		{
-			// Catches exceptions from file loading or ANTLR CharStream creation
-			Debug.logError("Error reading file.");
-			Debug.logError("Reason: " + e.getMessage());
+			Debug.logError("Error reading file: " + e.getMessage());
 		}
 		catch (Exception e)
 		{
-			// Catches any other unexpected exceptions
-			Debug.logError("An unexpected error occurred: " + e.getMessage());
+			Debug.logError("Unexpected error: " + e.getMessage());
 			e.printStackTrace();
 		}
 	}

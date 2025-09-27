@@ -114,9 +114,18 @@ modifiers
     :   (PUBLIC_KW | PRIVATE_KW | STATIC_KW | CONST_KW)+
     ;
 
+// --- Type Definition ---
+
+// NEW RULE: Defines a C#-style tuple type, e.g., (int, string)
+tupleType
+    :   L_PAREN_SYM type (COMMA_SYM type)+ R_PAREN_SYM
+    ;
+
+// UPDATED: Now includes tupleType as a valid alternative
 type
     :   primitiveType (L_BRACK_SYM R_BRACK_SYM)*
     |   qualifiedName (L_BRACK_SYM R_BRACK_SYM)*
+    |   tupleType
     ;
 
 primitiveType
@@ -265,9 +274,14 @@ powerExpression
     :   unaryExpression (EXP_OP unaryExpression)*
     ;
 
+// NEW RULE: Explicitly defines a casting operation
+castExpression
+    :   L_PAREN_SYM type R_PAREN_SYM unaryExpression
+    ;
+
 unaryExpression
     :   (ADD_OP | SUB_OP | LOG_NOT_OP | BIT_NOT_OP) unaryExpression
-    |   L_PAREN_SYM type R_PAREN_SYM unaryExpression // Casting
+    |   castExpression        // Use the new rule for explicit casting
     |   postfixExpression
     ;
 
@@ -279,13 +293,19 @@ postfixExpression
         )*
     ;
 
+// NEW RULE: Defines a C#-style tuple literal, e.g., (3, "hello")
+tupleLiteral
+    :   L_PAREN_SYM expression (COMMA_SYM expression)+ R_PAREN_SYM
+    ;
+
 // --- Primary: allow array initializer here as well ---
 primary
-    :   L_PAREN_SYM expression R_PAREN_SYM
+    :   L_PAREN_SYM expression R_PAREN_SYM // Parenthesized expression for grouping
     |   literal
     |   ID
     |   NEW_KW type (L_PAREN_SYM argumentList? R_PAREN_SYM | L_BRACK_SYM expression R_BRACK_SYM)
     |   arrayInitializer
+    |   tupleLiteral                     // Allow tuple literals
     ;
 
 // An argument list that handles positional, named, and mixed arguments like C#.

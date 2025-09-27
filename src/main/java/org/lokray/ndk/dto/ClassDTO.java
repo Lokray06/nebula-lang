@@ -1,0 +1,12 @@
+package org.lokray.ndk.dto;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class ClassDTO
+{
+	public String name;
+	public boolean isNative = false;
+	public List<MethodDTO> methods = new ArrayList<>();
+	public List<FieldDTO> fields = new ArrayList<>();
+}
