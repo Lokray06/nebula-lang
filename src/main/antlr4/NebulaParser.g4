@@ -22,7 +22,7 @@ importDeclaration
     ;
 
 namespaceDeclaration
-    :   NAMESPACE_KW qualifiedName L_CURLY_SYM (classDeclaration)* R_CURLY_SYM
+    :   NAMESPACE_KW qualifiedName L_CURLY_SYM (classDeclaration | nativeClassDeclaration)* R_CURLY_SYM
     ;
 
 aliasDeclaration
@@ -30,10 +30,18 @@ aliasDeclaration
     ;
 
 // --- Class Structure ---
+
+// Retain your nativeClassDeclaration
+nativeClassDeclaration
+    :   NATIVE_KW modifiers? CLASS_KW ID L_CURLY_SYM nativeClassBody* R_CURLY_SYM
+    ;
+
+// Retain your classDeclaration
 classDeclaration
     :   modifiers? CLASS_KW ID L_CURLY_SYM classBody* R_CURLY_SYM
     ;
 
+// Retain your classBody for regular classes
 classBody
     :   fieldDeclaration
     |   methodDeclaration
@@ -41,28 +49,69 @@ classBody
     |   constructorDeclaration
     ;
 
+// nativeClassBody
+nativeClassBody
+    :   fieldDeclaration              // Native fields can have initializers (i.e., be fieldDeclaration)
+    |   nativeFieldDeclaration        // Or they can be native (no initializer)
+    |   methodDeclaration
+    |   nativeMethodDeclaration
+    |   propertyDeclaration
+    |   nativePropertyDeclaration
+    |   constructorDeclaration
+    |   nativeConstructorDeclaration
+    ;
+
+// --- Class Members ---
+
+// RETAIN: Regular constructor (must have a block)
 constructorDeclaration
     :   modifiers? ID L_PAREN_SYM parameterList? R_PAREN_SYM block
     ;
 
+// NEW: Native constructor (no block/body)
+nativeConstructorDeclaration
+    :   NATIVE_KW modifiers? ID L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
+    ;
+
+// RETAIN: Regular property (must have getter/setter blocks, even if empty/SEMI_SYM)
 propertyDeclaration
     :   modifiers? type ID L_CURLY_SYM (GET_KW SEMI_SYM)? (SET_KW SEMI_SYM)? R_CURLY_SYM
     ;
 
+// NEW: Native property (no getter/setter body/block)
+// This assumes 'native properties' are essentially accessors implemented by the runtime,
+// and thus only require a declaration signature.
+nativePropertyDeclaration
+    :   NATIVE_KW modifiers? type ID SEMI_SYM // No L_CURLY_SYM block
+    ;
+
+// RETAIN: Regular field (can have an initializer)
 fieldDeclaration
     :   modifiers? type variableDeclarator (COMMA_SYM variableDeclarator)* SEMI_SYM
     ;
 
-variableDeclarator
-    :   ID (EQUALS_SYM expression)?
+// NEW: Native field (must NOT have an initializer, enforced by using simple ID and no '= expression')
+nativeFieldDeclaration
+    :   NATIVE_KW modifiers? type ID (COMMA_SYM ID)* SEMI_SYM
     ;
 
+// RETAIN: Native method (no block/body)
+nativeMethodDeclaration
+    :   NATIVE_KW modifiers? type ID L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
+    ;
+
+// RETAIN: Regular method (must have a block)
 methodDeclaration
     :   modifiers? type ID L_PAREN_SYM parameterList? R_PAREN_SYM block
     ;
 
+// RETAIN variableDeclarator (used by fieldDeclaration)
+variableDeclarator
+    :   ID (EQUALS_SYM expression)?
+    ;
+
 modifiers
-    :   (PUBLIC_KW | PRIVATE_KW | STATIC_KW | CONST_KW | NATIVE_KW)+
+    :   (PUBLIC_KW | PRIVATE_KW | STATIC_KW | CONST_KW)+
     ;
 
 type
@@ -71,7 +120,7 @@ type
     ;
 
 primitiveType
-    :   VOID_T | NULL_T | OBJECT_T | BYTE_T | SHORT_T | INT_T | LONG_T | BYTE_SPE_T
+    :   VOID_T | NULL_T | BYTE_T | SHORT_T | INT_T | LONG_T | BYTE_SPE_T
     |   SHORT_SPE_T | INT_SPE_T | LONG_SPE_T | U_BYTE_T | U_SHORT_T | U_INT_T
     |   U_LONG_T | U_BYTE_SPE_T | U_SHORT_SPE_T | U_INT_SPE_T | U_LONG_SPE_T
     |   FLOAT_T | DOUBLE_T | BOOL_T | CHAR_T | STRING_T
@@ -114,14 +163,14 @@ ifStatement
     ;
 
 forStatement
-    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM statement     # SimplifiedFor
+    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM statement     // SimplifiedFor
     | FOR_KW L_PAREN_SYM (variableDeclaration | expression)? SEMI_SYM expression? SEMI_SYM expression? R_PAREN_SYM statement
-                                                                    # TraditionalFor
+                                                                    // TraditionalFor
     ;
 
 simplifiedForClause
-    : iter=ID EQUALS_SYM start=expression op=relationalOperator limit=expression # SimplifiedForWithInitializer
-    | iter=ID op=relationalOperator limit=expression                             # SimplifiedForNoInitializer
+    : iter=ID EQUALS_SYM start=expression op=relationalOperator limit=expression // SimplifiedForWithInitializer
+    | iter=ID op=relationalOperator limit=expression                             // SimplifiedForNoInitializer
     ;
 
 relationalOperator

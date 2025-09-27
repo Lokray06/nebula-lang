@@ -57,7 +57,6 @@ DEFAULT_KW: 'default';
 
 VOID_T: 'void';
 NULL_T: 'null';
-OBJECT_T: 'Object';
 
 BYTE_T: 'byte';
 SHORT_T: 'short';
