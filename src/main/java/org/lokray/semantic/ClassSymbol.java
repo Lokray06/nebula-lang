@@ -1,29 +1,90 @@
+// File: src/main/java/org/lokray/semantic/ClassSymbol.java
 package org.lokray.semantic;
 
-import java.util.ArrayList;
-import java.util.List;
+import org.lokray.semantic.type.ClassType;
+import org.lokray.semantic.type.Type;
+
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class ClassSymbol extends Scope implements Symbol
 {
 	private final String name;
-	private final Scope enclosingScope;
-	private final List<String> modifiers = new ArrayList<>();
+	private final ClassType type;
+	private final Map<String, List<MethodSymbol>> methodsByName = new HashMap<>();
+	private boolean isNative = false;
+	private ClassSymbol superClass; // FIX: Added superclass field
 
 	public ClassSymbol(String name, Scope enclosingScope)
 	{
 		super(enclosingScope);
 		this.name = name;
-		this.enclosingScope = enclosingScope;
+		this.type = new ClassType(this);
 	}
 
-	public void addModifier(String mod)
+	// FIX: Added setters and getters for modifiers and superclass
+	public void setNative(boolean isNative)
 	{
-		modifiers.add(mod);
+		this.isNative = isNative;
 	}
 
-	public List<String> getModifiers()
+	public boolean isNative()
 	{
-		return modifiers;
+		return isNative;
+	}
+
+	public ClassSymbol getSuperClass()
+	{
+		return superClass;
+	}
+
+	public void setSuperClass(ClassSymbol superClass)
+	{
+		this.superClass = superClass;
+	}
+
+	public void defineMethod(MethodSymbol ms)
+	{
+		methodsByName.computeIfAbsent(ms.getName(), k -> new ArrayList<>()).add(ms);
+		super.define(ms);
+	}
+
+	public List<MethodSymbol> resolveMethods(String name)
+	{
+		return methodsByName.getOrDefault(name, new ArrayList<>());
+	}
+
+	// FIX: Added this method for overload resolution
+	public Optional<MethodSymbol> resolveMethod(String name, List<Type> argTypes)
+	{
+		List<MethodSymbol> candidates = resolveMethods(name);
+		for (MethodSymbol candidate : candidates)
+		{
+			if (candidate.getParameterTypes().size() != argTypes.size())
+			{
+				continue;
+			}
+			boolean allMatch = true;
+			for (int i = 0; i < argTypes.size(); i++)
+			{
+				if (!argTypes.get(i).isAssignableTo(candidate.getParameterTypes().get(i)))
+				{
+					allMatch = false;
+					break;
+				}
+			}
+			if (allMatch)
+			{
+				return Optional.of(candidate); // Found a match
+			}
+		}
+		return Optional.empty(); // No suitable overload found
+	}
+
+	// FIX: Added this getter
+	public Map<String, List<MethodSymbol>> getMethodsByName()
+	{
+		return methodsByName;
 	}
 
 	@Override
@@ -33,8 +94,8 @@ public class ClassSymbol extends Scope implements Symbol
 	}
 
 	@Override
-	public Scope getEnclosingScope()
+	public ClassType getType()
 	{
-		return enclosingScope;
+		return type;
 	}
 }

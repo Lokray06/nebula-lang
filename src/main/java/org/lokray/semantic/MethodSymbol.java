@@ -1,4 +1,7 @@
+// File: src/main/java/org/lokray/semantic/MethodSymbol.java
 package org.lokray.semantic;
+
+import org.lokray.semantic.type.Type;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -6,24 +9,21 @@ import java.util.List;
 public class MethodSymbol extends Scope implements Symbol
 {
 	private final String name;
-	private final Scope enclosingScope;
-	private final List<String> modifiers = new ArrayList<>();
+	private Type returnType; // FIX: Made non-final
+	private List<Type> parameterTypes; // FIX: Made non-final
+	private final boolean isStatic;
+	private final boolean isPublic;
+	private final boolean isConstructor;
 
-	public MethodSymbol(String name, Scope enclosingScope)
+	public MethodSymbol(String name, Type returnType, List<Type> parameterTypes, Scope enclosingScope, boolean isStatic, boolean isPublic, boolean isConstructor)
 	{
 		super(enclosingScope);
 		this.name = name;
-		this.enclosingScope = enclosingScope;
-	}
-
-	public void addModifier(String mod)
-	{
-		modifiers.add(mod);
-	}
-
-	public List<String> getModifiers()
-	{
-		return modifiers;
+		this.returnType = returnType;
+		this.parameterTypes = parameterTypes;
+		this.isStatic = isStatic;
+		this.isPublic = isPublic;
+		this.isConstructor = isConstructor;
 	}
 
 	@Override
@@ -33,8 +33,40 @@ public class MethodSymbol extends Scope implements Symbol
 	}
 
 	@Override
-	public Scope getEnclosingScope()
+	public Type getType()
 	{
-		return enclosingScope;
+		return returnType;
+	}
+
+	public List<Type> getParameterTypes()
+	{
+		return parameterTypes;
+	}
+
+	// FIX: Added setter
+	public void setReturnType(Type returnType)
+	{
+		this.returnType = returnType;
+	}
+
+	// FIX: Added setter
+	public void setParameterTypes(List<Type> parameterTypes)
+	{
+		this.parameterTypes = parameterTypes;
+	}
+
+	public boolean isStatic()
+	{
+		return isStatic;
+	}
+
+	public boolean isPublic()
+	{
+		return isPublic;
+	}
+
+	public boolean isConstructor()
+	{
+		return isConstructor;
 	}
 }

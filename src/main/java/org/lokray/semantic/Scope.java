@@ -1,14 +1,13 @@
+// File: src/main/java/org/lokray/semantic/Scope.java
 package org.lokray.semantic;
+
+import org.lokray.semantic.type.Type;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiConsumer;
 
-/**
- * Represents a scope (like a namespace, class, or method body) in the program.
- * It manages symbols defined within it.
- */
 public class Scope implements Symbol
 {
 	private final Scope enclosingScope;
@@ -24,50 +23,57 @@ public class Scope implements Symbol
 		symbols.put(sym.getName(), sym);
 	}
 
-	/**
-	 * Resolves a symbol by name, searching up through enclosing scopes.
-	 * CRITICAL: Automatically dereferences AliasSymbols to find the final target symbol.
-	 */
 	public Optional<Symbol> resolve(String name)
 	{
 		Optional<Symbol> local = resolveLocally(name);
 		if (local.isPresent())
 		{
 			Symbol sym = local.get();
-			// Keep following the alias until we find the real symbol
-			while (sym instanceof AliasSymbol alias)
-			{
-				sym = alias.getTargetSymbol();
+			if (sym instanceof AliasSymbol)
+			{ // Aliases are resolved at use-site
+				return local;
 			}
-			return Optional.of(sym);
+			return local;
 		}
-
 		if (enclosingScope != null)
 		{
-			// Search the parent scope
 			return enclosingScope.resolve(name);
 		}
 		return Optional.empty();
 	}
 
-	/**
-	 * Resolves a symbol only within the current scope, without searching parents or dereferencing aliases.
-	 */
 	public Optional<Symbol> resolveLocally(String name)
 	{
 		return Optional.ofNullable(symbols.get(name));
 	}
 
-	/**
-	 * Resolves a qualified path (e.g., "nebula.io.Console" or "Console.println") starting from this scope.
-	 * It performs a deep, local-only search through scopes/namespaces.
-	 */
+	// FIX: Added these three methods for alias handling and symbol access
+	public boolean isAlias(String name)
+	{
+		return resolveLocally(name).map(s -> s instanceof AliasSymbol).orElse(false);
+	}
+
+	public Symbol resolveAlias(String name)
+	{
+		Symbol symbol = resolveLocally(name).orElse(null);
+		if (symbol instanceof AliasSymbol)
+		{
+			return ((AliasSymbol) symbol).getTargetSymbol();
+		}
+		return symbol; // Should not happen if isAlias is checked first
+	}
+
+	public Map<String, Symbol> getSymbols()
+	{
+		return symbols;
+	}
+
+
 	public Optional<Symbol> resolvePath(String qualifiedName)
 	{
 		String[] parts = qualifiedName.split("\\.");
 		Scope currentScopeForResolve = this;
 		Symbol foundSymbol = null;
-
 		for (int i = 0; i < parts.length; i++)
 		{
 			String part = parts[i];
@@ -80,7 +86,6 @@ public class Scope implements Symbol
 
 			if (next.isEmpty())
 			{
-				// If the first part is not found locally, we should check the enclosing scopes (Global/Namespace)
 				if (i == 0 && enclosingScope != null)
 				{
 					return enclosingScope.resolvePath(qualifiedName);
@@ -89,11 +94,7 @@ public class Scope implements Symbol
 			}
 
 			foundSymbol = next.get();
-
-			// CRITICAL FIX: Dereference the alias to get the actual Class/Namespace symbol
-			// This is required when resolving a path like "Console.println" where "Console"
-			// is an imported AliasSymbol.
-			while (foundSymbol instanceof AliasSymbol alias)
+			if (foundSymbol instanceof AliasSymbol alias)
 			{
 				foundSymbol = alias.getTargetSymbol();
 			}
@@ -104,9 +105,7 @@ public class Scope implements Symbol
 			}
 			else if (i < parts.length - 1)
 			{
-				// We found a non-scope symbol (like a variable or method) but there are more parts.
-				// This means the path traversal must stop.
-				return Optional.empty();
+				return Optional.empty(); // Path continues but symbol is not a scope
 			}
 		}
 		return Optional.ofNullable(foundSymbol);
@@ -115,7 +114,22 @@ public class Scope implements Symbol
 	@Override
 	public String getName()
 	{
+		// Scope name is context-dependent, often representing a class, method, or namespace
+		if (this instanceof ClassSymbol)
+		{
+			return ((ClassSymbol) this).getName();
+		}
+		if (this instanceof NamespaceSymbol)
+		{
+			return ((NamespaceSymbol) this).getName();
+		}
 		return "<scope>";
+	}
+
+	@Override
+	public Type getType()
+	{
+		return null;
 	}
 
 	public Scope getEnclosingScope()

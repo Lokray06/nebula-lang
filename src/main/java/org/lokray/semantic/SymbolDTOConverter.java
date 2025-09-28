@@ -1,3 +1,4 @@
+// File: src/main/java/org/lokray/semantic/SymbolDTOConverter.java
 package org.lokray.semantic;
 
 import org.lokray.ndk.dto.ClassDTO;
@@ -45,7 +46,7 @@ public class SymbolDTOConverter
 	{
 		ClassDTO dto = new ClassDTO();
 		dto.name = cs.getName();
-		dto.isNative = cs.getModifiers().contains("native");
+		dto.isNative = cs.isNative(); // CHANGE: Use the new boolean field
 
 		cs.forEachSymbol((n, s) ->
 		{
@@ -53,14 +54,15 @@ public class SymbolDTOConverter
 			{
 				MethodDTO md = new MethodDTO();
 				md.name = ms.getName();
-				md.isStatic = ms.getModifiers().contains("static");
+				md.isStatic = ms.isStatic(); // CHANGE: Use the new boolean field
 				dto.methods.add(md);
 			}
 			else if (s instanceof VariableSymbol vs)
 			{
 				FieldDTO fd = new FieldDTO();
 				fd.name = vs.getName();
-				fd.type = vs.getType();
+				// CHANGE: Convert Type object to its name string
+				fd.type = vs.getType().getName();
 				dto.fields.add(fd);
 			}
 		});

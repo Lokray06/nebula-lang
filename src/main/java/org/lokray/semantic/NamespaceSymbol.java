@@ -1,3 +1,4 @@
+// File: src/main/java/org/lokray/semantic/NamespaceSymbol.java
 package org.lokray.semantic;
 
 /**
@@ -18,5 +19,16 @@ public class NamespaceSymbol extends Scope implements Symbol
 	public String getName()
 	{
 		return name;
+	}
+
+	// FIX: Added this method
+	public String getFqn()
+	{
+		if (getEnclosingScope() instanceof NamespaceSymbol)
+		{
+			String parentFqn = ((NamespaceSymbol) getEnclosingScope()).getFqn();
+			return parentFqn.isEmpty() ? name : parentFqn + "." + name;
+		}
+		return name; // Top-level namespace
 	}
 }

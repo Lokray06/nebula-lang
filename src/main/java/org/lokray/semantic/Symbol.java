@@ -1,11 +1,11 @@
+// File: src/main/java/org/lokray/semantic/Symbol.java
 package org.lokray.semantic;
 
-/**
- * An interface representing any named entity in the code, like a
- * variable, method, or class.
- */
+import org.lokray.semantic.type.Type;
+
 public interface Symbol
 {
 	String getName();
-}
 
+	Type getType();
+}

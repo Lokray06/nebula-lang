@@ -1,43 +1,33 @@
+// File: src/main/java/org/lokray/semantic/BuiltInTypeLoader.java
 package org.lokray.semantic;
 
-import java.util.Set;
+import org.lokray.semantic.type.NullType;
+import org.lokray.semantic.type.PrimitiveType;
 
 /**
  * Utility class responsible for defining all built-in primitive types
  * into the Global Scope of the Symbol Table.
- * This abstracts the language's primitive types away from the core
- * semantic analysis logic.
  */
 public class BuiltInTypeLoader
 {
-
-	// A complete set of all Nebula primitive type keywords.
-	private static final Set<String> PRIMITIVE_TYPES = Set.of(
-			// Special
-			"void", "null",
-			"bool",
-			"char", "string",
-
-			// Integers
-			"byte", "short", "int", "long",         // Normal
-			"ubyte", "ushort", "uint", "ulong",     // Normal Unsigned
-			"int8", "int16", "int32", "int64",      // Explicit
-			"uint8", "uint16", "uint32", "uint64",  // Explicit unsigned
-
-			// Floating point
-			"float", "double"
-	);
-
 	/**
-	 * Defines all primitive types as TypeSymbols in the specified Scope.
+	 * Defines all primitive types as TypeSymbols in the specified Scope
+	 * by querying the PrimitiveType class as the single source of truth.
 	 *
 	 * @param scope The scope (typically the Global Scope) to define the types in.
 	 */
 	public static void definePrimitives(Scope scope)
 	{
-		for (String typeName : PRIMITIVE_TYPES)
+		// Define all primitive types by getting them from the central registry
+		PrimitiveType.getAllPrimitiveKeywords().forEach((name, type) ->
 		{
-			scope.define(new TypeSymbol(typeName));
-		}
+			scope.define(new TypeSymbol(name, type));
+		});
+
+		// FIX: Removed special handling for 'string'. This is now handled by an alias
+		// created in SemanticAnalyzer after the NDK is loaded, which is more robust.
+
+		// Define 'null' as a special TypeSymbol that holds the NullType
+		scope.define(new TypeSymbol("null", NullType.INSTANCE));
 	}
 }

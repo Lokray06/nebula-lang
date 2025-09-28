@@ -1,16 +1,21 @@
+// File: src/main/java/org/lokray/semantic/SymbolTableBuilder.java
 package org.lokray.semantic;
 
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.parser.NebulaParser;
 import org.lokray.parser.NebulaParserBaseVisitor;
+import org.lokray.semantic.type.*;
 import org.lokray.util.Debug;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
-public class SymbolTableBuilder
+public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 {
 	private final Scope root;
 	private Scope currentScope;
+	private boolean hasErrors = false;
 
 	public SymbolTableBuilder(Scope root)
 	{
@@ -18,178 +23,120 @@ public class SymbolTableBuilder
 		this.currentScope = root;
 	}
 
-	public void visit(ParseTree tree)
+	public boolean hasErrors()
 	{
-		new DefVisitor().visit(tree);
+		return hasErrors;
 	}
 
-	private class DefVisitor extends NebulaParserBaseVisitor<Void>
+	private void logError(org.antlr.v4.runtime.Token token, String msg)
 	{
-		// FIX: Add this method to handle imports
-		@Override
-		public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
-		{
-			String qualifiedName = ctx.qualifiedName().getText();
-			Optional<Symbol> target = root.resolvePath(qualifiedName);
+		String err = String.format("Semantic Error at line %d:%d - %s",
+				token.getLine(), token.getCharPositionInLine() + 1, msg);
+		Debug.logError(err);
+		hasErrors = true;
+	}
 
-			if (target.isPresent())
+	// Type resolution during this pass is minimal; we just create placeholders
+	// or resolve primitives. Full resolution happens in Pass 2.
+	private Type resolveTypeFromCtx(NebulaParser.TypeContext ctx)
+	{
+		if (ctx.primitiveType() != null)
+		{
+			String typeName = ctx.primitiveType().getText();
+			Optional<Symbol> typeSymbol = root.resolve(typeName);
+			if (typeSymbol.isPresent())
 			{
-				// An import is just an alias for the class's simple name
-				String simpleName = qualifiedName.substring(qualifiedName.lastIndexOf('.') + 1);
-				currentScope.define(new AliasSymbol(simpleName, target.get()));
+				return typeSymbol.get().getType();
+			}
+		}
+		// For class types, we can't fully resolve yet. We just use the name.
+		// A placeholder or deferred type resolution mechanism would be more robust.
+		// For now, we'll rely on string names and resolve fully in the next pass.
+		return new UnresolvedType(ctx.getText());
+	}
+
+	@Override
+	public Void visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
+	{
+		String[] parts = ctx.qualifiedName().getText().split("\\.");
+		Scope parent = currentScope;
+		for (String part : parts)
+		{
+			Optional<Symbol> existing = parent.resolveLocally(part);
+			if (existing.isPresent() && existing.get() instanceof NamespaceSymbol ns)
+			{
+				parent = ns;
 			}
 			else
 			{
-				Debug.logError("Semantic Error: Cannot resolve import '" + qualifiedName + "'");
+				NamespaceSymbol ns = new NamespaceSymbol(part, parent);
+				parent.define(ns);
+				parent = ns;
 			}
-			return null;
+		}
+		Scope old = currentScope;
+		currentScope = parent;
+		visitChildren(ctx);
+		currentScope = old;
+		return null;
+	}
+
+	@Override
+	public Void visitClassDeclaration(NebulaParser.ClassDeclarationContext ctx)
+	{
+		ClassSymbol cs = new ClassSymbol(ctx.ID().getText(), currentScope);
+		currentScope.define(cs);
+		Scope old = currentScope;
+		currentScope = cs;
+		visitChildren(ctx);
+		currentScope = old;
+		return null;
+	}
+
+	@Override
+	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+	{
+		Type returnType = resolveTypeFromCtx(ctx.type());
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveTypeFromCtx(pCtx.type()));
+			}
 		}
 
-		// FIX: Add this method to handle aliases
-		@Override
-		public Void visitAliasDeclaration(NebulaParser.AliasDeclarationContext ctx)
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || ctx.modifiers().getText().contains("public");
+
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false);
+		((ClassSymbol) currentScope).defineMethod(ms);
+		return null; // Don't visit block in this pass
+	}
+
+	@Override
+	public Void visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
+	{
+		Type fieldType = resolveTypeFromCtx(ctx.type());
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || ctx.modifiers().getText().contains("public");
+		boolean isConst = ctx.modifiers() != null && ctx.modifiers().getText().contains("const");
+
+		for (var declarator : ctx.variableDeclarator())
 		{
-			String aliasName = ctx.ID().getText();
-			String qualifiedName = ctx.qualifiedName().getText();
-
-			// Resolve the target symbol starting from the current scope, which includes imports
-			Optional<Symbol> target = currentScope.resolvePath(qualifiedName);
-
-			if (target.isPresent())
+			VariableSymbol vs = new VariableSymbol(declarator.ID().getText(), fieldType, isStatic, isPublic, isConst);
+			if (currentScope.resolveLocally(vs.getName()).isPresent())
 			{
-				currentScope.define(new AliasSymbol(aliasName, target.get()));
+				logError(declarator.ID().getSymbol(), "Field '" + vs.getName() + "' is already defined in this class.");
 			}
 			else
 			{
-				Debug.logError("Semantic Error: Cannot resolve alias target '" + qualifiedName + "'");
-			}
-			return null;
-		}
-
-		@Override
-		public Void visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
-		{
-			String[] parts = ctx.qualifiedName().getText().split("\\.");
-			Scope parent = currentScope;
-			for (String part : parts)
-			{
-				var existing = parent.resolveLocally(part);
-				if (existing.isPresent() && existing.get() instanceof NamespaceSymbol ns)
-				{
-					parent = ns;
-				}
-				else
-				{
-					NamespaceSymbol ns = new NamespaceSymbol(part, parent);
-					parent.define(ns);
-					parent = ns;
-				}
-			}
-			Scope old = currentScope;
-			currentScope = parent;
-			visitChildren(ctx);
-			currentScope = old;
-			return null;
-		}
-
-		@Override
-		public Void visitClassDeclaration(NebulaParser.ClassDeclarationContext ctx)
-		{
-			ClassSymbol cs = new ClassSymbol(ctx.ID().getText(), currentScope);
-			if (ctx.modifiers() != null)
-			{
-				String mods = ctx.modifiers().getText();
-				for (String m : mods.split("\\s+"))
-				{
-					cs.addModifier(m);
-				}
-			}
-			currentScope.define(cs);
-			Scope old = currentScope;
-			currentScope = cs;
-			visitChildren(ctx);
-			currentScope = old;
-			return null;
-		}
-
-		@Override
-		public Void visitNativeClassDeclaration(NebulaParser.NativeClassDeclarationContext ctx)
-		{
-			ClassSymbol cs = new ClassSymbol(ctx.ID().getText(), currentScope);
-			cs.addModifier("native"); // Mark it as native
-			if (ctx.modifiers() != null)
-			{
-				String mods = ctx.modifiers().getText();
-				for (String m : mods.split("\\s+"))
-				{
-					cs.addModifier(m);
-				}
-			}
-			currentScope.define(cs);
-			Scope old = currentScope;
-			currentScope = cs;
-			visitChildren(ctx);
-			currentScope = old;
-			return null;
-		}
-
-		@Override
-		public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-		{
-			MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentScope);
-			if (ctx.modifiers() != null)
-			{
-				String mods = ctx.modifiers().getText();
-				for (String m : mods.split("\\s+"))
-				{
-					ms.addModifier(m);
-				}
-			}
-			currentScope.define(ms);
-			return null;
-		}
-
-		// FIX: Handles 'native ... method();'
-		@Override
-		public Void visitNativeMethodDeclaration(NebulaParser.NativeMethodDeclarationContext ctx)
-		{
-			MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentScope);
-			ms.addModifier("native");
-			if (ctx.modifiers() != null)
-			{
-				String mods = ctx.modifiers().getText();
-				for (String m : mods.split("\\s+"))
-				{
-					ms.addModifier(m);
-				}
-			}
-			currentScope.define(ms);
-			return null;
-		}
-
-		@Override
-		public Void visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
-		{
-			String type = ctx.type().getText();
-			for (var varCtx : ctx.variableDeclarator())
-			{
-				VariableSymbol vs = new VariableSymbol(varCtx.ID().getText(), type);
 				currentScope.define(vs);
 			}
-			return visitChildren(ctx);
 		}
-
-		// FIX: Handles 'native ... field;'
-		@Override
-		public Void visitNativeFieldDeclaration(NebulaParser.NativeFieldDeclarationContext ctx)
-		{
-			String type = ctx.type().getText();
-			for (var idNode : ctx.ID())
-			{
-				VariableSymbol vs = new VariableSymbol(idNode.getText(), type);
-				currentScope.define(vs);
-			}
-			return null;
-		}
+		return null; // Don't visit initializers yet
 	}
+
+	// You must also implement visitors for properties, constructors, etc.
+	// to define their symbols in this pass.
 }
