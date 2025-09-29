@@ -47,6 +47,7 @@ classBody
     |   methodDeclaration
     |   propertyDeclaration
     |   constructorDeclaration
+    |   operatorOverloadMethodDeclaration
     ;
 
 // nativeClassBody
@@ -59,6 +60,7 @@ nativeClassBody
     |   nativePropertyDeclaration
     |   constructorDeclaration
     |   nativeConstructorDeclaration
+    |   nativeOperatorOverloadMethodDeclaration
     ;
 
 // --- Class Members ---
@@ -95,10 +97,23 @@ nativeFieldDeclaration
     :   NATIVE_KW modifiers? type ID (COMMA_SYM ID)* SEMI_SYM
     ;
 
+// RETAIN: Regular method (must have a block)
+nativeOperatorOverloadMethodDeclaration
+    :   NATIVE_KW modifiers? type OPERATOR_KW validOperatorOverloads L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
+    ;
+
 // RETAIN: Native method (no block/body)
 nativeMethodDeclaration
     :   NATIVE_KW modifiers? type ID L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
     ;
+
+// RETAIN: Regular method (must have a block)
+operatorOverloadMethodDeclaration
+    :   modifiers? type OPERATOR_KW validOperatorOverloads L_PAREN_SYM parameterList? R_PAREN_SYM block
+    ;
+
+validOperatorOverloads
+    : ADD_OP | SUB_OP | MUL_OP | DIV_OP | MOD_OP | EXP_OP | EQUAL_EQUAL_SYM;
 
 // RETAIN: Regular method (must have a block)
 methodDeclaration
