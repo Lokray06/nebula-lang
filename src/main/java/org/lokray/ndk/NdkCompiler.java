@@ -12,6 +12,7 @@ import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.*;
 import org.lokray.semantic.symbol.Scope;
 import org.lokray.util.Debug;
+import org.lokray.util.SymbolDTOConverter;
 
 import java.io.IOException;
 import java.nio.file.*;

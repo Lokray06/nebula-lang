@@ -20,6 +20,11 @@ public interface Type extends Symbol
 		return false;
 	}
 
+	default boolean isTuple()
+	{
+		return false;
+	}
+
 	default boolean isReferenceType()
 	{
 		return false;

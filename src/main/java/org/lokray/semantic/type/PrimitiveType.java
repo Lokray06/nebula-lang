@@ -3,10 +3,9 @@ package org.lokray.semantic.type;
 
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
+import static org.lokray.parser.NebulaLexer.*;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 
 public class PrimitiveType implements Type
 {
@@ -28,10 +27,10 @@ public class PrimitiveType implements Type
 	public static final PrimitiveType INT16 = new PrimitiveType("int16");
 	public static final PrimitiveType INT32 = new PrimitiveType("int32");
 	public static final PrimitiveType INT64 = new PrimitiveType("int64");
-	public static final PrimitiveType UINT8 = new PrimitiveType("ubyte");
-	public static final PrimitiveType UINT16 = new PrimitiveType("ushort");
-	public static final PrimitiveType UINT32 = new PrimitiveType("uint");
-	public static final PrimitiveType UINT64 = new PrimitiveType("ulong");
+	public static final PrimitiveType UINT8 = new PrimitiveType("uint8");
+	public static final PrimitiveType UINT16 = new PrimitiveType("uint16");
+	public static final PrimitiveType UINT32 = new PrimitiveType("uint32");
+	public static final PrimitiveType UINT64 = new PrimitiveType("uint64");
 
 	public static final PrimitiveType FLOAT = new PrimitiveType("float");
 	public static final PrimitiveType DOUBLE = new PrimitiveType("double");
@@ -39,6 +38,8 @@ public class PrimitiveType implements Type
 
 	// --- The Single Source of Truth for all keywords ---
 	private static final Map<String, PrimitiveType> KEYWORD_TO_TYPE_MAP;
+	private static final Map<PrimitiveType, Set<PrimitiveType>> WIDENING_MAP = new HashMap<>();
+
 
 	// Static initializer block to populate the map once
 	static
@@ -72,6 +73,46 @@ public class PrimitiveType implements Type
 		map.put("double", DOUBLE);
 
 		KEYWORD_TO_TYPE_MAP = Collections.unmodifiableMap(map);
+
+		// Define widening conversions
+		Set<PrimitiveType> byteWidens = Set.of(SHORT, INT, LONG, FLOAT, DOUBLE, INT16, INT32, INT64);
+		Set<PrimitiveType> shortWidens = Set.of(INT, LONG, FLOAT, DOUBLE, INT32, INT64);
+		Set<PrimitiveType> intWidens = Set.of(LONG, FLOAT, DOUBLE, INT64, ULONG, UINT64); // Allow int to ulong
+		Set<PrimitiveType> longWidens = Set.of(FLOAT, DOUBLE);
+		Set<PrimitiveType> charWidens = Set.of(INT, LONG, FLOAT, DOUBLE, INT32, INT64);
+		Set<PrimitiveType> floatWidens = Set.of(DOUBLE);
+
+		WIDENING_MAP.put(BYTE, byteWidens);
+		WIDENING_MAP.put(INT8, byteWidens);
+
+		WIDENING_MAP.put(SHORT, shortWidens);
+		WIDENING_MAP.put(INT16, shortWidens);
+
+		WIDENING_MAP.put(INT, intWidens);
+		WIDENING_MAP.put(INT32, intWidens);
+
+		WIDENING_MAP.put(LONG, longWidens);
+		WIDENING_MAP.put(INT64, longWidens);
+
+		WIDENING_MAP.put(CHAR, charWidens);
+		WIDENING_MAP.put(FLOAT, floatWidens);
+
+		Set<PrimitiveType> ubyteWidens = Set.of(USHORT, UINT, ULONG, UINT16, UINT32, UINT64, SHORT, INT, LONG, FLOAT, DOUBLE, INT16, INT32, INT64);
+		Set<PrimitiveType> ushortWidens = Set.of(UINT, ULONG, UINT32, UINT64, INT, LONG, FLOAT, DOUBLE, INT32, INT64);
+		Set<PrimitiveType> uintWidens = Set.of(ULONG, UINT64, LONG, FLOAT, DOUBLE, INT64);
+		Set<PrimitiveType> ulongWidens = Set.of(FLOAT, DOUBLE);
+
+		WIDENING_MAP.put(UBYTE, ubyteWidens);
+		WIDENING_MAP.put(UINT8, ubyteWidens);
+
+		WIDENING_MAP.put(USHORT, ushortWidens);
+		WIDENING_MAP.put(UINT16, ushortWidens);
+
+		WIDENING_MAP.put(UINT, uintWidens);
+		WIDENING_MAP.put(UINT32, uintWidens);
+
+		WIDENING_MAP.put(ULONG, ulongWidens);
+		WIDENING_MAP.put(UINT64, ulongWidens);
 	}
 
 	/**
@@ -114,11 +155,20 @@ public class PrimitiveType implements Type
 		{
 			return true;
 		}
-		// Allow assigning integer literals to wider numeric types
-		if (this.isNumeric() && other.isNumeric())
+
+		// Handle type aliases (e.g., int and int32 are interchangeable)
+		if (areEquivalent(this, other))
 		{
-			// A more robust implementation would check for widening conversions only
 			return true;
+		}
+
+		if (other instanceof PrimitiveType otherPrimitive)
+		{
+			Set<PrimitiveType> allowed = WIDENING_MAP.get(this);
+			if (allowed != null && allowed.contains(otherPrimitive))
+			{
+				return true;
+			}
 		}
 		return false;
 	}
@@ -151,5 +201,51 @@ public class PrimitiveType implements Type
 	public Symbol resolveStaticProperty(String name)
 	{
 		return staticProperties.get(name);
+	}
+
+	private static boolean areEquivalent(Type a, Type b)
+	{
+		if (!(a instanceof PrimitiveType typeA) || !(b instanceof PrimitiveType typeB))
+		{
+			return false;
+		}
+		return getCanonicalType(typeA).equals(getCanonicalType(typeB));
+	}
+
+	private static PrimitiveType getCanonicalType(PrimitiveType type)
+	{
+		if (type.equals(INT8) || type.equals(BYTE_SPE_T))
+		{
+			return BYTE;
+		}
+		if (type.equals(INT16) || type.equals(SHORT_SPE_T))
+		{
+			return SHORT;
+		}
+		if (type.equals(INT32) || type.equals(INT_SPE_T))
+		{
+			return INT;
+		}
+		if (type.equals(INT64) || type.equals(LONG_SPE_T))
+		{
+			return LONG;
+		}
+		if (type.equals(UINT8) || type.equals(U_BYTE_SPE_T))
+		{
+			return UBYTE;
+		}
+		if (type.equals(UINT16) || type.equals(U_SHORT_SPE_T))
+		{
+			return USHORT;
+		}
+		if (type.equals(UINT32) || type.equals(U_INT_SPE_T))
+		{
+			return UINT;
+		}
+		if (type.equals(UINT64) || type.equals(U_LONG_SPE_T))
+		{
+			return ULONG;
+		}
+		return type;
 	}
 }

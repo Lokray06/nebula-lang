@@ -1,0 +1,777 @@
+package org.lokray.semantic;
+
+import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.tree.ParseTree;
+import org.lokray.parser.NebulaParser;
+import org.lokray.parser.NebulaParserBaseVisitor;
+import org.lokray.semantic.symbol.*;
+import org.lokray.semantic.symbol.Symbol;
+import org.lokray.semantic.type.*;
+import org.lokray.util.Debug;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * This visitor performs the final pass, type-checking all expressions and resolving symbols.
+ */
+public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
+{
+
+	private final Scope globalScope;
+	private Scope currentScope;
+	private ClassSymbol currentClass;
+	private MethodSymbol currentMethod;
+	private boolean hasErrors = false;
+
+	private final Map<String, ClassSymbol> declaredClasses;
+	private final Map<ParseTree, Symbol> resolvedSymbols;
+	private final Map<ParseTree, Type> resolvedTypes;
+
+	public TypeCheckVisitor(Scope globalScope, Map<String, ClassSymbol> declaredClasses, Map<ParseTree, Symbol> symbols, Map<ParseTree, Type> types)
+	{
+		this.globalScope = globalScope;
+		this.currentScope = globalScope;
+		this.declaredClasses = declaredClasses;
+		this.resolvedSymbols = symbols;
+		this.resolvedTypes = types;
+	}
+
+	public boolean hasErrors()
+	{
+		return hasErrors;
+	}
+
+	private void logError(Token token, String msg)
+	{
+		String err = String.format("Semantic Error at line %d:%d - %s", token.getLine(), token.getCharPositionInLine() + 1, msg);
+		Debug.logError(err);
+		hasErrors = true;
+	}
+
+	private void note(ParseTree ctx, Symbol symbol)
+	{
+		if (ctx != null)
+		{
+			resolvedSymbols.put(ctx, symbol);
+		}
+	}
+
+	private void note(ParseTree ctx, Type type)
+	{
+		if (ctx != null)
+		{
+			resolvedTypes.put(ctx, type);
+		}
+	}
+
+	@Override
+	protected Type defaultResult()
+	{
+		return ErrorType.INSTANCE;
+	}
+
+	private Type resolveType(NebulaParser.TypeContext ctx)
+	{
+		if (ctx == null)
+		{
+			return ErrorType.INSTANCE;
+		}
+
+		// NEW: Handle tuple types like (int, string Name)
+		if (ctx.tupleType() != null)
+		{
+			List<TupleElementSymbol> elements = new ArrayList<>();
+			for (int i = 0; i < ctx.tupleType().tupleTypeElement().size(); i++)
+			{
+				var elementCtx = ctx.tupleType().tupleTypeElement(i);
+				Type elementType = resolveType(elementCtx.type());
+				String name = elementCtx.ID() != null ? elementCtx.ID().getText() : null;
+
+				// Note: SymbolTableBuilder already checked for duplicate names, so we don't need to here.
+				elements.add(new TupleElementSymbol(name, elementType, i));
+			}
+			return new TupleType(elements);
+		}
+
+		String baseTypeName;
+		if (ctx.primitiveType() != null)
+		{
+			baseTypeName = ctx.primitiveType().getText();
+		}
+		else if (ctx.qualifiedName() != null)
+		{
+			// Use getFqn to properly handle namespaces
+			baseTypeName = getFqn(ctx.qualifiedName());
+		}
+		else
+		{
+			logError(ctx.start, "Unsupported type structure.");
+			return ErrorType.INSTANCE;
+		}
+
+		Optional<Symbol> symbol = currentScope.resolve(baseTypeName);
+
+		if (symbol.isEmpty())
+		{
+			if (declaredClasses.containsKey(baseTypeName))
+			{
+				symbol = Optional.of(declaredClasses.get(baseTypeName));
+			}
+			else
+			{
+				logError(ctx.start, "Undefined type: '" + baseTypeName + "'.");
+				return ErrorType.INSTANCE;
+			}
+		}
+
+		Type baseType = symbol.get().getType();
+		if (baseType instanceof UnresolvedType)
+		{
+			baseType = resolveUnresolvedType((UnresolvedType) baseType, ctx.start);
+		}
+
+		int rank = ctx.L_BRACK_SYM().size();
+		for (int i = 0; i < rank; i++)
+		{
+			baseType = new ArrayType(baseType);
+		}
+		return baseType;
+	}
+
+	private Type resolveUnresolvedType(UnresolvedType unresolved, Token errorToken)
+	{
+		String name = unresolved.getName();
+		Optional<Symbol> resolved = currentScope.resolve(name);
+		if (resolved.isPresent() && resolved.get().getType() != null && !(resolved.get().getType() instanceof UnresolvedType))
+		{
+			return resolved.get().getType();
+		}
+		if (declaredClasses.containsKey(name))
+		{
+			return declaredClasses.get(name).getType();
+		}
+		String fqn = findFqnForSimpleName(name);
+		if (fqn != null)
+		{
+			return declaredClasses.get(fqn).getType();
+		}
+		logError(errorToken, "Undefined type: '" + name + "'.");
+		return ErrorType.INSTANCE;
+	}
+
+	private String findFqnForSimpleName(String simpleName)
+	{
+		if (currentScope instanceof NamespaceSymbol)
+		{
+			String potentialFqn = ((NamespaceSymbol) currentScope).getFqn() + "." + simpleName;
+			if (declaredClasses.containsKey(potentialFqn))
+			{
+				return potentialFqn;
+			}
+		}
+		else if (currentScope instanceof ClassSymbol)
+		{
+			String potentialFqn = ((ClassSymbol) currentScope).getEnclosingScope().getName() + "." + simpleName;
+			if (declaredClasses.containsKey(potentialFqn))
+			{
+				return potentialFqn;
+			}
+		}
+		for (String fqn : declaredClasses.keySet())
+		{
+			if (fqn.endsWith("." + simpleName))
+			{
+				return fqn;
+			}
+		}
+		return null;
+	}
+
+	// --- Scope Management ---
+
+	@Override
+	public Type visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
+	{
+		String nsName = getFqn(ctx.qualifiedName());
+		currentScope = (Scope) currentScope.resolve(nsName).orElse(currentScope);
+		visitChildren(ctx);
+		currentScope = currentScope.getEnclosingScope();
+		return null;
+	}
+
+	@Override
+	public Type visitClassDeclaration(NebulaParser.ClassDeclarationContext ctx)
+	{
+		String className = ctx.ID().getText();
+		currentClass = (ClassSymbol) currentScope.resolveLocally(className).orElse(null);
+		if (currentClass == null)
+		{
+			return null;
+		}
+		currentScope = currentClass;
+		if (ctx.classBody() != null)
+		{
+			for (var member : ctx.classBody())
+			{
+				visit(member);
+			}
+		}
+		currentScope = currentScope.getEnclosingScope();
+		currentClass = null;
+		return null;
+	}
+
+	@Override
+	public Type visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
+	{
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveType(pCtx.type()));
+			}
+		}
+
+		// Resolve the specific constructor symbol
+		Optional<MethodSymbol> ctorOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
+		if (ctorOpt.isEmpty())
+		{
+			logError(ctx.ID().getSymbol(), "Internal error: Constructor symbol not found during type checking.");
+			return null;
+		}
+
+		currentMethod = ctorOpt.get();
+		currentScope = currentMethod;
+
+		// Visit parameters to define them in the constructor's scope
+		if (ctx.parameterList() != null)
+		{
+			visit(ctx.parameterList());
+		}
+
+		// Visit the constructor body
+		visit(ctx.block());
+
+		currentScope = currentScope.getEnclosingScope();
+		currentMethod = null;
+		return null;
+	}
+
+	@Override
+	public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+	{
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveType(pCtx.type()));
+			}
+		}
+		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
+		if (methodOpt.isEmpty())
+		{
+			logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
+			return null;
+		}
+		currentMethod = methodOpt.get();
+		currentScope = currentMethod;
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				visit(pCtx);
+			}
+		}
+		visit(ctx.block());
+		currentScope = currentScope.getEnclosingScope();
+		currentMethod = null;
+		return null;
+	}
+
+	@Override
+	public Type visitParameter(NebulaParser.ParameterContext ctx)
+	{
+		Type paramType = resolveType(ctx.type());
+		String paramName = ctx.ID().getText();
+		VariableSymbol varSymbol = new VariableSymbol(paramName, paramType, false, true, false);
+		currentScope.define(varSymbol);
+		note(ctx, varSymbol);
+		note(ctx, paramType);
+		return paramType;
+	}
+
+	@Override
+	public Type visitBlock(NebulaParser.BlockContext ctx)
+	{
+		Scope blockScope = new Scope(currentScope);
+		currentScope = blockScope;
+		visitChildren(ctx);
+		currentScope = currentScope.getEnclosingScope();
+		return PrimitiveType.VOID;
+	}
+
+	// --- Statements ---
+	@Override
+	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
+	{
+		Type declaredType = resolveType(ctx.type());
+		for (var declarator : ctx.variableDeclarator())
+		{
+			String varName = declarator.ID().getText();
+			if (currentScope.resolveLocally(varName).isPresent())
+			{
+				logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
+				continue;
+			}
+			if (declarator.expression() != null)
+			{
+				Type initializerType = visit(declarator.expression());
+				if (!initializerType.isAssignableTo(declaredType))
+				{
+					logError(declarator.expression().start, "Incompatible types: cannot assign '" + initializerType.getName() + "' to '" + declaredType.getName() + "'.");
+				}
+			}
+			VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
+			currentScope.define(varSymbol);
+			note(declarator, varSymbol);
+		}
+		return PrimitiveType.VOID;
+	}
+
+	@Override
+	public Type visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
+	{
+		for (var declarator : ctx.variableDeclarator())
+		{
+			if (declarator.expression() != null)
+			{
+				Type fieldType = resolveType(ctx.type());
+				Type initializerType = visit(declarator.expression());
+				if (!initializerType.isAssignableTo(fieldType))
+				{
+					logError(declarator.expression().start, "Incompatible types in field initialization: cannot assign '" + initializerType.getName() + "' to '" + fieldType.getName() + "'.");
+				}
+			}
+		}
+		return PrimitiveType.VOID;
+	}
+
+	@Override
+	public Type visitForStatement(NebulaParser.ForStatementContext ctx)
+	{
+		Scope forScope = new Scope(currentScope);
+		currentScope = forScope;
+
+		if (ctx.simplifiedForClause() != null)
+		{
+			NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause();
+			String varName = simplifiedCtx.ID().getText();
+
+			Type intType = globalScope.resolve("int").orElseThrow().getType();
+
+			VariableSymbol loopVar = new VariableSymbol(varName, intType, false, true, false);
+			currentScope.define(loopVar);
+			note(simplifiedCtx.ID(), loopVar);
+			note(simplifiedCtx.ID(), intType);
+
+			for (NebulaParser.ExpressionContext exprCtx : simplifiedCtx.expression())
+			{
+				Type exprType = visit(exprCtx);
+				if (!exprType.isAssignableTo(intType))
+				{
+					logError(exprCtx.start, "Incompatible types in for loop clause: expected an integer expression, but found '" + exprType.getName() + "'.");
+				}
+			}
+
+			visit(ctx.statement());
+
+		}
+		else
+		{ // Traditional for-loop
+			int expressionIndex = 0;
+			// Handle initializer
+			if (ctx.variableDeclaration() != null)
+			{
+				visit(ctx.variableDeclaration());
+			}
+			else if (!ctx.expression().isEmpty() && ctx.SEMI_SYM(0) != null)
+			{
+				// Make sure we don't misinterpret the condition as the initializer
+				if (ctx.expression().get(0).getStart().getTokenIndex() < ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
+				{
+					visit(ctx.expression(expressionIndex++));
+				}
+			}
+
+			// Handle condition
+			if (ctx.SEMI_SYM(0) != null && ctx.SEMI_SYM(1) != null)
+			{
+				if (ctx.expression().size() > expressionIndex)
+				{
+					if (ctx.expression().get(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
+					{
+						Type conditionType = visit(ctx.expression(expressionIndex++));
+						Type boolType = globalScope.resolve("bool").orElseThrow().getType();
+						if (!conditionType.isAssignableTo(boolType))
+						{
+							logError(ctx.expression(expressionIndex - 1).start, "For loop condition must be of type 'bool', but found '" + conditionType.getName() + "'.");
+						}
+					}
+				}
+			}
+
+
+			// Handle update
+			if (ctx.expression().size() > expressionIndex)
+			{
+				visit(ctx.expression(expressionIndex));
+			}
+
+			// Visit the loop body
+			visit(ctx.statement());
+		}
+
+		currentScope = currentScope.getEnclosingScope();
+		return PrimitiveType.VOID;
+	}
+
+	@Override
+	public Type visitForeachStatement(NebulaParser.ForeachStatementContext ctx)
+	{
+		Scope foreachScope = new Scope(currentScope);
+		currentScope = foreachScope;
+
+		Type declaredElementType = resolveType(ctx.type());
+		String varName = ctx.ID().getText();
+		Type collectionType = visit(ctx.expression());
+		Type actualElementType = ErrorType.INSTANCE;
+
+		if (collectionType instanceof ArrayType)
+		{
+			actualElementType = ((ArrayType) collectionType).getElementType();
+		}
+		else
+		{
+			logError(ctx.expression().start, "Foreach loop can only iterate over arrays, but found type '" + collectionType.getName() + "'.");
+		}
+
+		if (!actualElementType.isAssignableTo(declaredElementType))
+		{
+			logError(ctx.type().start, "Cannot convert element of type '" + actualElementType.getName() + "' to '" + declaredElementType.getName() + "' in foreach loop.");
+		}
+
+		VariableSymbol loopVar = new VariableSymbol(varName, declaredElementType, false, true, true);
+		currentScope.define(loopVar);
+		note(ctx.ID(), loopVar);
+		note(ctx.ID(), declaredElementType);
+
+		visit(ctx.statement());
+
+		currentScope = currentScope.getEnclosingScope();
+		return PrimitiveType.VOID;
+	}
+
+	// --- Expressions ---
+	// NEW: Visitor for tuple literals like (1, "a") or (Name: "a", Value: 1)
+	@Override
+	public Type visitTupleLiteral(NebulaParser.TupleLiteralContext ctx)
+	{
+		List<TupleElementSymbol> elements = new ArrayList<>();
+		boolean isNamed = !ctx.namedArgument().isEmpty();
+
+		if (isNamed)
+		{
+			// Handle named arguments: (Sum: 4.5, Count: 3)
+			for (int i = 0; i < ctx.namedArgument().size(); i++)
+			{
+				var namedArgCtx = ctx.namedArgument(i);
+				String name = namedArgCtx.ID().getText();
+				Type valueType = visit(namedArgCtx.expression());
+				if (valueType instanceof ErrorType)
+				{
+					return ErrorType.INSTANCE;
+				}
+				elements.add(new TupleElementSymbol(name, valueType, i));
+			}
+		}
+		else
+		{
+			// Handle positional arguments: (4.5, 3)
+			for (int i = 0; i < ctx.expression().size(); i++)
+			{
+				Type valueType = visit(ctx.expression(i));
+				if (valueType instanceof ErrorType)
+				{
+					return ErrorType.INSTANCE;
+				}
+				elements.add(new TupleElementSymbol(null, valueType, i)); // No explicit name
+			}
+		}
+
+		TupleType tupleType = new TupleType(elements);
+		note(ctx, tupleType);
+		return tupleType;
+	}
+
+	// UPDATED: Handle tuple assignment, including by name
+	@Override
+	public Type visitAssignmentExpression(NebulaParser.AssignmentExpressionContext ctx)
+	{
+		Type targetType = visit(ctx.conditionalExpression(0));
+		if (ctx.assignmentOperator() != null)
+		{
+			if (targetType instanceof ErrorType)
+			{
+				return ErrorType.INSTANCE;
+			}
+			Type valueType = visit(ctx.conditionalExpression(1));
+			if (valueType instanceof ErrorType)
+			{
+				return ErrorType.INSTANCE;
+			}
+
+			boolean isAssignable;
+			// Check for special case: assigning a named tuple literal to a tuple type
+			if (targetType.isTuple() && valueType.isTuple() && !((TupleType) valueType).getElements().isEmpty() && ((TupleType) valueType).getElements().get(0).getName() != null)
+			{
+				isAssignable = checkNamedTupleAssignment((TupleType) targetType, (TupleType) valueType, ctx.conditionalExpression(1).start);
+			}
+			else
+			{
+				isAssignable = valueType.isAssignableTo(targetType);
+			}
+
+			if (!isAssignable)
+			{
+				logError(ctx.assignmentOperator().start, "Incompatible types: cannot assign '" + valueType.getName() + "' to '" + targetType.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, targetType);
+			return targetType;
+		}
+		note(ctx, targetType);
+		return targetType;
+	}
+
+	// NEW HELPER METHOD: For assigning named tuple literals
+	private boolean checkNamedTupleAssignment(TupleType target, TupleType source, Token errorToken)
+	{
+		if (target.getElements().size() != source.getElements().size())
+		{
+			return false;
+		}
+
+		for (TupleElementSymbol sourceElement : source.getElements())
+		{
+			// Find the corresponding element in the target by name
+			Optional<Symbol> targetElementOpt = target.resolveLocally(sourceElement.getName());
+
+			if (targetElementOpt.isEmpty())
+			{
+				logError(errorToken, "The tuple literal has an element named '" + sourceElement.getName() + "' which is not present in the target type '" + target.getName() + "'.");
+				return false;
+			}
+
+			if (!sourceElement.getType().isAssignableTo(targetElementOpt.get().getType()))
+			{
+				return false; // Type mismatch
+			}
+		}
+		return true;
+	}
+
+
+	// UPDATED: Handle member access on tuples (e.g., t.Item1, t.Sum)
+	@Override
+	public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
+	{
+		Type currentType = visit(ctx.primary());
+		Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
+
+		for (int i = 0; i < ctx.ID().size(); i++)
+		{
+			if (currentType instanceof ErrorType)
+			{
+				return ErrorType.INSTANCE;
+			}
+
+			String memberName = ctx.ID(i).getText();
+			Scope scopeToSearch = null;
+
+			if (currentSymbol instanceof Scope)
+			{
+				scopeToSearch = (Scope) currentSymbol;
+			}
+			else if (currentType instanceof ClassType)
+			{
+				scopeToSearch = ((ClassType) currentType).getClassSymbol();
+			}
+			else if (currentType.isTuple())
+			{ // Handle tuples
+				scopeToSearch = (Scope) currentType;
+			}
+			else if (currentType.isArray())
+			{
+				Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
+				// Create a temporary scope for array properties
+				/*
+				Scope arrayScope = new Scope(null);
+				arrayScope.define(new VariableSymbol("size", PrimitiveType.INT, false, true, true));
+				scopeToSearch = arrayScope;
+				 */
+			}
+
+			if (scopeToSearch == null)
+			{
+				logError(ctx.DOT_SYM(i).getSymbol(), "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'. It is not a class, namespace, or tuple.");
+				return ErrorType.INSTANCE;
+			}
+
+			Optional<Symbol> member = scopeToSearch.resolve(memberName);
+			if (member.isEmpty())
+			{
+				logError(ctx.ID(i).getSymbol(), "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+
+			currentSymbol = member.get();
+			if (currentSymbol instanceof AliasSymbol)
+			{
+				currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
+			}
+
+			currentType = currentSymbol.getType();
+			if (currentType instanceof UnresolvedType)
+			{
+				currentType = resolveUnresolvedType((UnresolvedType) currentType, ctx.ID(i).getSymbol());
+			}
+		}
+
+		note(ctx, currentSymbol);
+		note(ctx, currentType);
+		return currentType;
+	}
+
+	private String getFqn(NebulaParser.QualifiedNameContext ctx)
+	{
+		return ctx.getText();
+	}
+
+	@Override
+	public Type visitPrimary(NebulaParser.PrimaryContext ctx)
+	{
+		if (ctx.ID() != null)
+		{
+			String name = ctx.ID().getText();
+
+			if (name.equals("this"))
+			{
+				if (currentMethod != null && currentMethod.isStatic())
+				{
+					logError(ctx.ID().getSymbol(), "'this' cannot be used in a static context.");
+					return ErrorType.INSTANCE;
+				}
+				if (currentClass == null)
+				{
+					logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context.");
+					return ErrorType.INSTANCE;
+				}
+				// 'this' refers to the current class instance.
+				Type thisType = currentClass.getType();
+				note(ctx, thisType);
+				note(ctx, new VariableSymbol("this", thisType, false, false, true)); // Create a symbol for 'this'
+				return thisType;
+			}
+
+			Optional<Symbol> symbolOpt = currentScope.resolve(name);
+			if (symbolOpt.isEmpty())
+			{
+				logError(ctx.ID().getSymbol(), "Cannot find symbol '" + name + "'.");
+				note(ctx, ErrorType.INSTANCE);
+				return ErrorType.INSTANCE;
+			}
+
+			Symbol symbol = symbolOpt.get();
+			if (symbol instanceof AliasSymbol)
+			{
+				symbol = ((AliasSymbol) symbol).getTargetSymbol();
+			}
+
+			if (name.equals("this"))
+			{
+				if (currentClass == null)
+				{
+					logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context.");
+					return ErrorType.INSTANCE;
+				}
+				symbol = new VariableSymbol("this", currentClass.getType(), false, false, true);
+			}
+
+			note(ctx, symbol);
+			Type type = symbol.getType();
+			if (type instanceof UnresolvedType)
+			{
+				type = resolveUnresolvedType((UnresolvedType) type, ctx.ID().getSymbol());
+			}
+			note(ctx, type);
+			return type;
+		}
+		if (ctx.literal() != null)
+		{
+			Type literalType = visit(ctx.literal());
+			note(ctx, literalType);
+			return literalType;
+		}
+		if (ctx.expression() != null)
+		{
+			Type exprType = visit(ctx.expression());
+			note(ctx, exprType);
+			return exprType;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitLiteral(NebulaParser.LiteralContext ctx)
+	{
+		if (ctx.INTEGER_LITERAL() != null)
+		{
+			return PrimitiveType.INT;
+		}
+		if (ctx.LONG_LITERAL() != null)
+		{
+			return PrimitiveType.LONG;
+		}
+		if (ctx.FLOAT_LITERAL() != null)
+		{
+			return PrimitiveType.FLOAT;
+		}
+		if (ctx.DOUBLE_LITERAL() != null)
+		{
+			return PrimitiveType.DOUBLE;
+		}
+		if (ctx.BOOLEAN_LITERAL() != null)
+		{
+			return PrimitiveType.BOOLEAN;
+		}
+		if (ctx.CHAR_LITERAL() != null)
+		{
+			return PrimitiveType.CHAR;
+		}
+		if (ctx.STRING_LITERAL() != null || ctx.interpolatedString() != null)
+		{
+			return this.globalScope.resolve("string").get().getType();
+		}
+		if (ctx.NULL_T() != null)
+		{
+			return NullType.INSTANCE;
+		}
+
+		return ErrorType.INSTANCE;
+	}
+}

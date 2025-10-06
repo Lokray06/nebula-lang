@@ -57,6 +57,33 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		{
 			return ErrorType.INSTANCE;
 		}
+
+		// NEW: Handle tuple types like (int, string Name)
+		if (ctx.tupleType() != null)
+		{
+			List<TupleElementSymbol> elements = new ArrayList<>();
+			for (int i = 0; i < ctx.tupleType().tupleTypeElement().size(); i++)
+			{
+				var elementCtx = ctx.tupleType().tupleTypeElement(i);
+				Type elementType = resolveTypeFromCtx(elementCtx.type());
+				String name = elementCtx.ID() != null ? elementCtx.ID().getText() : null;
+
+				// Check for duplicate explicit names within the same tuple type declaration
+				if (name != null)
+				{
+					for (TupleElementSymbol existing : elements)
+					{
+						if (name.equals(existing.getName()))
+						{
+							logError(elementCtx.ID().getSymbol(), "Duplicate tuple element name '" + name + "'.");
+						}
+					}
+				}
+				elements.add(new TupleElementSymbol(name, elementType, i));
+			}
+			return new TupleType(elements);
+		}
+
 		String baseTypeName;
 		if (ctx.primitiveType() != null)
 		{
@@ -237,6 +264,33 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			VariableSymbol vs = new VariableSymbol(varName, fieldType, isStatic, isPublic, isConst);
 			currentClass.define(vs);
 		}
+		return null;
+	}
+
+	@Override
+	public Void visitPropertyDeclaration(NebulaParser.PropertyDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
+			logError(ctx.start, "Property defined outside of a class.");
+			return null;
+		}
+		Type propType = resolveTypeFromCtx(ctx.type());
+		String propName = ctx.ID().getText();
+
+		if (currentClass.resolveLocally(propName).isPresent())
+		{
+			logError(ctx.ID().getSymbol(), "Member '" + propName + "' is already defined in this class.");
+			return null;
+		}
+
+		// For simplicity, we'll model a property as a variable symbol.
+		// A more advanced implementation might use a special PropertySymbol.
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+
+		VariableSymbol vs = new VariableSymbol(propName, propType, isStatic, isPublic, false);
+		currentClass.define(vs);
 		return null;
 	}
 

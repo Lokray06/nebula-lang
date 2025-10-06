@@ -1,5 +1,5 @@
 // File: src/main/java/org/lokray/semantic/BuiltInTypeLoader.java
-package org.lokray.semantic;
+package org.lokray.util;
 
 import org.lokray.semantic.symbol.Scope;
 import org.lokray.semantic.symbol.TypeSymbol;
@@ -25,9 +25,6 @@ public class BuiltInTypeLoader
 		{
 			scope.define(new TypeSymbol(name, type));
 		});
-
-		// FIX: Removed special handling for 'string'. This is now handled by an alias
-		// created in SemanticAnalyzer after the NDK is loaded, which is more robust.
 
 		// Define 'null' as a special TypeSymbol that holds the NullType
 		scope.define(new TypeSymbol("null", NullType.INSTANCE));

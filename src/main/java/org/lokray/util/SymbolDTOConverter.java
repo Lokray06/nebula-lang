@@ -1,5 +1,5 @@
 // File: src/main/java/org/lokray/semantic/SymbolDTOConverter.java
-package org.lokray.semantic;
+package org.lokray.util;
 
 import org.lokray.ndk.dto.ClassDTO;
 import org.lokray.ndk.dto.FieldDTO;

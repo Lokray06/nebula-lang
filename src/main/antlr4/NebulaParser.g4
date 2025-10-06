@@ -131,9 +131,14 @@ modifiers
 
 // --- Type Definition ---
 
-// NEW RULE: Defines a C#-style tuple type, e.g., (int, string)
+// NEW RULE: Defines an element within a tuple type, e.g., "int" or "int Count"
+tupleTypeElement
+    :   type ID?
+    ;
+
+// UPDATED: Now includes named elements
 tupleType
-    :   L_PAREN_SYM type (COMMA_SYM type)+ R_PAREN_SYM
+    :   L_PAREN_SYM tupleTypeElement (COMMA_SYM tupleTypeElement)* R_PAREN_SYM
     ;
 
 // UPDATED: Now includes tupleType as a valid alternative
@@ -308,9 +313,13 @@ postfixExpression
         )*
     ;
 
-// NEW RULE: Defines a C#-style tuple literal, e.g., (3, "hello")
+// UPDATED: Now supports positional or named elements
 tupleLiteral
-    :   L_PAREN_SYM expression (COMMA_SYM expression)+ R_PAREN_SYM
+    :   L_PAREN_SYM
+        (   namedArgument (COMMA_SYM namedArgument)* // Case 1: All named elements
+        |   expression (COMMA_SYM expression)+          // Case 2: 2+ positional elements
+        )
+        R_PAREN_SYM
     ;
 
 // --- Primary: allow array initializer here as well ---
