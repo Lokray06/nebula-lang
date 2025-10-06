@@ -1,6 +1,8 @@
 // File: src/main/java/org/lokray/semantic/BuiltInTypeLoader.java
 package org.lokray.semantic;
 
+import org.lokray.semantic.symbol.Scope;
+import org.lokray.semantic.symbol.TypeSymbol;
 import org.lokray.semantic.type.NullType;
 import org.lokray.semantic.type.PrimitiveType;
 

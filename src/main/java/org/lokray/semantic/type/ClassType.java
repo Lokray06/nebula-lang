@@ -1,7 +1,7 @@
 // File: src/main/java/org/lokray/semantic/type/ClassType.java
 package org.lokray.semantic.type;
 
-import org.lokray.semantic.ClassSymbol;
+import org.lokray.semantic.symbol.ClassSymbol;
 
 public class ClassType implements Type
 {

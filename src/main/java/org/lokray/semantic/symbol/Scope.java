@@ -1,5 +1,5 @@
 // File: src/main/java/org/lokray/semantic/Scope.java
-package org.lokray.semantic;
+package org.lokray.semantic.symbol;
 
 import org.lokray.semantic.type.Type;
 

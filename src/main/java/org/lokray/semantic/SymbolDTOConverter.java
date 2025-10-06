@@ -5,6 +5,7 @@ import org.lokray.ndk.dto.ClassDTO;
 import org.lokray.ndk.dto.FieldDTO;
 import org.lokray.ndk.dto.MethodDTO;
 import org.lokray.ndk.dto.NamespaceDTO;
+import org.lokray.semantic.symbol.*;
 
 import java.util.ArrayList;
 import java.util.List;

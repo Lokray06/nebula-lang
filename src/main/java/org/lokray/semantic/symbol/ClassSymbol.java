@@ -1,11 +1,10 @@
 // File: src/main/java/org/lokray/semantic/ClassSymbol.java
-package org.lokray.semantic;
+package org.lokray.semantic.symbol;
 
 import org.lokray.semantic.type.ClassType;
 import org.lokray.semantic.type.Type;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class ClassSymbol extends Scope implements Symbol
 {

@@ -1,5 +1,5 @@
 // File: src/main/java/org/lokray/semantic/NamespaceSymbol.java
-package org.lokray.semantic;
+package org.lokray.semantic.symbol;
 
 /**
  * Represents a named scope that acts like a package or namespace.

@@ -5,21 +5,18 @@ import com.google.gson.GsonBuilder;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.lokray.ndk.dto.ClassDTO;
 import org.lokray.ndk.dto.LibraryDTO;
-import org.lokray.ndk.dto.MethodDTO;
 import org.lokray.ndk.dto.NamespaceDTO;
-import org.lokray.ndk.dto.FieldDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.*;
+import org.lokray.semantic.symbol.Scope;
 import org.lokray.util.Debug;
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Walks a directory of .neb NDk source files, runs Pass1 to build symbols,

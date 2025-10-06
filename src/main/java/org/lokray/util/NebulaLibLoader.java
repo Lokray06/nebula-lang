@@ -1,5 +1,5 @@
 // File: src/main/java/org/lokray/semantic/NebulaLibLoader.java
-package org.lokray.semantic;
+package org.lokray.util;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -8,16 +8,15 @@ import org.lokray.ndk.dto.FieldDTO;
 import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.ndk.dto.MethodDTO;
 import org.lokray.ndk.dto.NamespaceDTO;
+import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.semantic.type.UnresolvedType;
-import org.lokray.util.Debug;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;

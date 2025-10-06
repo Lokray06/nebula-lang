@@ -1,13 +1,12 @@
 // File: src/main/java/org/lokray/semantic/type/PrimitiveType.java
 package org.lokray.semantic.type;
 
-import org.lokray.semantic.Symbol;
-import org.lokray.semantic.VariableSymbol;
+import org.lokray.semantic.symbol.Symbol;
+import org.lokray.semantic.symbol.VariableSymbol;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 
 public class PrimitiveType implements Type
 {

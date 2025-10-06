@@ -1,9 +1,8 @@
 // File: src/main/java/org/lokray/semantic/MethodSymbol.java
-package org.lokray.semantic;
+package org.lokray.semantic.symbol;
 
 import org.lokray.semantic.type.Type;
 
-import java.util.ArrayList;
 import java.util.List;
 
 public class MethodSymbol extends Scope implements Symbol
