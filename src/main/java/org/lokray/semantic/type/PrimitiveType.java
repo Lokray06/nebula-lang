@@ -3,6 +3,7 @@ package org.lokray.semantic.type;
 
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
+
 import static org.lokray.parser.NebulaLexer.*;
 
 import java.util.*;
@@ -176,13 +177,17 @@ public class PrimitiveType implements Type
 	@Override
 	public boolean isNumeric()
 	{
-		return this.equals(INT) || this.equals(LONG) || this.equals(FLOAT) || this.equals(DOUBLE) || this.equals(CHAR);
+		return isInteger() || this.equals(FLOAT) || this.equals(DOUBLE);
 	}
 
 	@Override
 	public boolean isInteger()
 	{
-		return this.equals(INT) || this.equals(LONG) || this.equals(CHAR);
+		return this.equals(BYTE) || this.equals(SHORT) || this.equals(INT) || this.equals(LONG) ||
+				this.equals(UBYTE) || this.equals(USHORT) || this.equals(UINT) || this.equals(ULONG) ||
+				this.equals(INT8) || this.equals(INT16) || this.equals(INT32) || this.equals(INT64) ||
+				this.equals(UINT8) || this.equals(UINT16) || this.equals(UINT32) || this.equals(UINT64) ||
+				this.equals(CHAR); // Chars can be treated as integers
 	}
 
 	private void initializeStaticProperties()

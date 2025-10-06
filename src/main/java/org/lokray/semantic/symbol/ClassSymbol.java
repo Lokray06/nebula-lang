@@ -12,7 +12,7 @@ public class ClassSymbol extends Scope implements Symbol
 	private final ClassType type;
 	private final Map<String, List<MethodSymbol>> methodsByName = new HashMap<>();
 	private boolean isNative = false;
-	private ClassSymbol superClass; // FIX: Added superclass field
+	private ClassSymbol superClass; // Added superclass field
 
 	public ClassSymbol(String name, Scope enclosingScope)
 	{
@@ -21,7 +21,7 @@ public class ClassSymbol extends Scope implements Symbol
 		this.type = new ClassType(this);
 	}
 
-	// FIX: Added setters and getters for modifiers and superclass
+	// Added setters and getters for modifiers and superclass
 	public void setNative(boolean isNative)
 	{
 		this.isNative = isNative;
@@ -53,7 +53,7 @@ public class ClassSymbol extends Scope implements Symbol
 		return methodsByName.getOrDefault(name, new ArrayList<>());
 	}
 
-	// FIX: Added this method for overload resolution
+	// Added this method for overload resolution
 	public Optional<MethodSymbol> resolveMethod(String name, List<Type> argTypes)
 	{
 		List<MethodSymbol> candidates = resolveMethods(name);
@@ -80,7 +80,7 @@ public class ClassSymbol extends Scope implements Symbol
 		return Optional.empty(); // No suitable overload found
 	}
 
-	// FIX: Added this getter
+	// Added this getter
 	public Map<String, List<MethodSymbol>> getMethodsByName()
 	{
 		return methodsByName;

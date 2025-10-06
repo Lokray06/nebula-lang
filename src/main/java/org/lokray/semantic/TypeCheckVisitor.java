@@ -372,6 +372,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause();
 			String varName = simplifiedCtx.ID().getText();
 
+			// The loop variable is implicitly an integer. Let's use 'int' as the default.
 			Type intType = globalScope.resolve("int").orElseThrow().getType();
 
 			VariableSymbol loopVar = new VariableSymbol(varName, intType, false, true, false);
@@ -382,7 +383,8 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			for (NebulaParser.ExpressionContext exprCtx : simplifiedCtx.expression())
 			{
 				Type exprType = visit(exprCtx);
-				if (!exprType.isAssignableTo(intType))
+				// Allow any integer type (int, long, etc.), not just 'int'.
+				if (!exprType.isInteger())
 				{
 					logError(exprCtx.start, "Incompatible types in for loop clause: expected an integer expression, but found '" + exprType.getName() + "'.");
 				}
@@ -585,7 +587,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return true;
 	}
 
-
 	// UPDATED: Handle member access on tuples (e.g., t.Item1, t.Sum)
 	@Override
 	public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
@@ -607,6 +608,10 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			{
 				scopeToSearch = (Scope) currentSymbol;
 			}
+			else if(currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
+			{
+				Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
+			}
 			else if (currentType instanceof ClassType)
 			{
 				scopeToSearch = ((ClassType) currentType).getClassSymbol();
@@ -615,16 +620,26 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			{ // Handle tuples
 				scopeToSearch = (Scope) currentType;
 			}
-			else if (currentType.isArray())
+
+
+			// Crappy fix
+			/*
+			// Handle .size for arrays and .length for strings
+			else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
 			{
-				Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
-				// Create a temporary scope for array properties
-				/*
-				Scope arrayScope = new Scope(null);
-				arrayScope.define(new VariableSymbol("size", PrimitiveType.INT, false, true, true));
-				scopeToSearch = arrayScope;
-				 */
+				Scope tempScope = new Scope(null);
+				Type intType = globalScope.resolve("int").orElseThrow().getType();
+				if (currentType.isArray())
+				{
+					tempScope.define(new VariableSymbol("size", intType, false, true, true)); // read-only public property
+				}
+				if (currentType instanceof ClassType && currentType.getName().equals("string"))
+				{
+					tempScope.define(new VariableSymbol("length", intType, false, true, true)); // read-only public property
+				}
+				scopeToSearch = tempScope;
 			}
+			*/
 
 			if (scopeToSearch == null)
 			{
@@ -655,6 +670,43 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		note(ctx, currentSymbol);
 		note(ctx, currentType);
 		return currentType;
+	}
+
+	@Override
+	public Type visitCastExpression(NebulaParser.CastExpressionContext ctx)
+	{
+		// Resolve the target type from the grammar rule.
+		Type targetType = resolveType(ctx.type());
+
+		// Visit the expression being cast to find its type.
+		// NOTE: The grammar is `castExpression: '(' type ')' unaryExpression;`
+		// so we visit the unaryExpression part.
+		Type originalType = visit(ctx.unaryExpression());
+
+		// Propagate errors
+		if (targetType instanceof ErrorType || originalType instanceof ErrorType)
+		{
+			note(ctx, ErrorType.INSTANCE);
+			return ErrorType.INSTANCE;
+		}
+
+		// Define valid casting rules.
+		// Allow casting between any two numeric types.
+		// Also allow casting from a class type to another (for downcasting/upcasting, though without inheritance check it's very basic).
+		boolean isNumericCast = originalType.isNumeric() && targetType.isNumeric();
+		boolean isReferenceCast = originalType.isReferenceType() && targetType.isReferenceType();
+
+		if (!isNumericCast && !isReferenceCast)
+		{
+			// A more advanced compiler would check for user-defined conversion operators here.
+			logError(ctx.start, "Cannot cast from '" + originalType.getName() + "' to '" + targetType.getName() + "'.");
+			note(ctx, ErrorType.INSTANCE);
+			return ErrorType.INSTANCE;
+		}
+
+		// The type of the entire cast expression is the target type.
+		note(ctx, targetType);
+		return targetType;
 	}
 
 	private String getFqn(NebulaParser.QualifiedNameContext ctx)

@@ -47,7 +47,7 @@ public class Scope implements Symbol
 		return Optional.ofNullable(symbols.get(name));
 	}
 
-	// FIX: Added these three methods for alias handling and symbol access
+	// Added these three methods for alias handling and symbol access
 	public boolean isAlias(String name)
 	{
 		return resolveLocally(name).map(s -> s instanceof AliasSymbol).orElse(false);
@@ -117,11 +117,11 @@ public class Scope implements Symbol
 		// Scope name is context-dependent, often representing a class, method, or namespace
 		if (this instanceof ClassSymbol)
 		{
-			return ((ClassSymbol) this).getName();
+			return (this).getName();
 		}
 		if (this instanceof NamespaceSymbol)
 		{
-			return ((NamespaceSymbol) this).getName();
+			return (this).getName();
 		}
 		return "<scope>";
 	}

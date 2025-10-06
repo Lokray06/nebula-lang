@@ -60,7 +60,7 @@
                 </executions>
                 <configuration>
                     <mainClass>org.lokray.Main</mainClass>
-                    <imageName>nebc</imageName>
+                    <imageName>nebula</imageName>
                 </configuration>
             </plugin>
         </plugins>

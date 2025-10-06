@@ -26,7 +26,7 @@ import java.util.Optional;
  */
 public class NebulaLibLoader
 {
-	// FIX: Updated method signature and implementation
+	// Updated method signature and implementation
 	public static void loadLibrary(Path libFile, Scope globalScope, Map<String, ClassSymbol> declaredClasses) throws IOException
 	{
 		String json = Files.readString(libFile);
@@ -39,7 +39,7 @@ public class NebulaLibLoader
 			NamespaceSymbol nsSym = getOrCreateNamespace(fqn, globalScope);
 			loadNamespaceDTO(ns, nsSym, globalScope, declaredClasses);
 		}
-		Debug.logInfo("Loaded ndk library: " + libFile.getFileName());
+		Debug.logInfo("Loaded ndk symbols from " + libFile.getFileName());
 	}
 
 	private static void loadNamespaceDTO(NamespaceDTO dto, NamespaceSymbol parent, Scope globalScope, Map<String, ClassSymbol> declaredClasses)

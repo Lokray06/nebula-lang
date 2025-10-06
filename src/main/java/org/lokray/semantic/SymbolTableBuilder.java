@@ -108,7 +108,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		return baseType;
 	}
 
-	// FIX: Implemented import handling in the first pass
+	// Implemented import handling in the first pass
 	@Override
 	public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
 	{
@@ -138,7 +138,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		return null;
 	}
 
-	// FIX: Moved alias handling to the first pass
+	// Moved alias handling to the first pass
 	@Override
 	public Void visitAliasDeclaration(NebulaParser.AliasDeclarationContext ctx)
 	{

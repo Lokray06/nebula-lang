@@ -8,8 +8,8 @@ import java.util.List;
 public class MethodSymbol extends Scope implements Symbol
 {
 	private final String name;
-	private Type returnType; // FIX: Made non-final
-	private List<Type> parameterTypes; // FIX: Made non-final
+	private Type returnType; // Made non-final
+	private List<Type> parameterTypes; // Made non-final
 	private final boolean isStatic;
 	private final boolean isPublic;
 	private final boolean isConstructor;
@@ -42,13 +42,13 @@ public class MethodSymbol extends Scope implements Symbol
 		return parameterTypes;
 	}
 
-	// FIX: Added setter
+	// Added setter
 	public void setReturnType(Type returnType)
 	{
 		this.returnType = returnType;
 	}
 
-	// FIX: Added setter
+	// Added setter
 	public void setParameterTypes(List<Type> parameterTypes)
 	{
 		this.parameterTypes = parameterTypes;

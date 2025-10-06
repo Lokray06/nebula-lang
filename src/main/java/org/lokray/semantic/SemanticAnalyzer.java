@@ -34,7 +34,7 @@ public class SemanticAnalyzer
 				// After loading, ensure all NDK types are properly linked
 				linkNdkSymbols();
 
-				// FIX: After NDK load, create a global alias for 'string' -> 'nebula.core.String'
+				// After NDK load, create a global alias for 'string' -> 'nebula.core.String'
 				if (declaredClasses.containsKey("nebula.core.String"))
 				{
 					Symbol stringSymbol = declaredClasses.get("nebula.core.String");

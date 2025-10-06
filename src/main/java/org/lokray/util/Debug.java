@@ -50,8 +50,8 @@ public class Debug
 	{
 		System.err.println("Invalid arguments: " + Arrays.toString(invalidArgs));
 		System.err.println("Usage:");
-		System.err.println("    -> nebc /path/to/nebula/file.neb [" + IGNORE_EXTENSIONS_FLAG + "]");
+		System.err.println("    -> nebula /path/to/nebula/file.neb [" + IGNORE_EXTENSIONS_FLAG + "]");
 		System.err.println("    or");
-		System.err.println("    -> nebc [" + IGNORE_EXTENSIONS_FLAG + "] /path/to/nebula/file.neb");
+		System.err.println("    -> nebula [" + IGNORE_EXTENSIONS_FLAG + "] /path/to/nebula/file.neb");
 	}
 }

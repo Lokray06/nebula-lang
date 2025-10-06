@@ -21,7 +21,7 @@ public class NamespaceSymbol extends Scope implements Symbol
 		return name;
 	}
 
-	// FIX: Added this method
+	// Added this method
 	public String getFqn()
 	{
 		if (getEnclosingScope() instanceof NamespaceSymbol)
