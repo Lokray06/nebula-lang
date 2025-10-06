@@ -180,7 +180,7 @@ statement
     |   breakStatement
     |   continueStatement
     |   switchStatement
-    |   expression SEMI_SYM
+    |   statementExpression SEMI_SYM
     ;
 
 variableDeclaration
@@ -238,6 +238,13 @@ switchBlock
     ;
 
 // --- Expressions (with precedence) ---
+
+// StatementExpression to limit which expressions can be statements
+statementExpression
+    :   assignmentExpression
+    |   (unaryExpression | postfixExpression) // Allows ++x and x++
+    ;
+
 expression
     :   assignmentExpression
     ;
@@ -300,8 +307,8 @@ castExpression
     ;
 
 unaryExpression
-    :   (ADD_OP | SUB_OP | LOG_NOT_OP | BIT_NOT_OP) unaryExpression
-    |   castExpression        // Use the new rule for explicit casting
+    :   op=(ADD_OP | SUB_OP | LOG_NOT_OP | BIT_NOT_OP | INC_OP | DEC_OP) unaryExpression
+    |   castExpression
     |   postfixExpression
     ;
 
@@ -310,6 +317,8 @@ postfixExpression
         ( DOT_SYM ID
         | L_PAREN_SYM argumentList? R_PAREN_SYM
         | L_BRACK_SYM expression R_BRACK_SYM
+        | INC_OP
+        | DEC_OP
         )*
     ;
 

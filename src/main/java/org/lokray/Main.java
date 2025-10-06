@@ -4,6 +4,7 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.Trees;
 import org.lokray.ndk.NdkCompiler;
 import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
@@ -59,6 +60,7 @@ public class Main
 			CommonTokenStream tokens = new CommonTokenStream(lexer);
 			NebulaParser parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
+			Debug.logInfo("Parse Tree:\n" + Trees.toStringTree(tree, parser));
 
 			if (parser.getNumberOfSyntaxErrors() > 0)
 			{
