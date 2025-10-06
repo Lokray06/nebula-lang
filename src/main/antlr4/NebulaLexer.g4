@@ -44,6 +44,8 @@ IMPORT_KW: 'import';
 INTERFACE_KW: 'interface';
 ABSTRACT_KW: 'abstract';
 
+OPERATOR_KW: 'operator';
+
 IF_KW: 'if';
 ELSE_KW: 'else';
 WHILE_KW: 'while';
