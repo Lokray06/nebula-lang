@@ -7,6 +7,8 @@ public class ClassDTO
 {
 	public String name;
 	public boolean isNative = false;
+	public boolean isStatic = false;
+	public boolean isPublic = false;
 	public List<MethodDTO> methods = new ArrayList<>();
 	public List<FieldDTO> fields = new ArrayList<>();
 }

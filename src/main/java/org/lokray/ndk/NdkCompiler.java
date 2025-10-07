@@ -10,14 +10,21 @@ import org.lokray.ndk.dto.NamespaceDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.*;
+import org.lokray.semantic.symbol.AliasSymbol;
+import org.lokray.semantic.symbol.ClassSymbol;
 import org.lokray.semantic.symbol.Scope;
+import org.lokray.semantic.symbol.Symbol;
+import org.lokray.semantic.type.Type;
+import org.lokray.util.BuiltInTypeLoader;
 import org.lokray.util.Debug;
 import org.lokray.util.SymbolDTOConverter;
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Walks a directory of .neb NDk source files, runs Pass1 to build symbols,
@@ -37,15 +44,16 @@ public class NdkCompiler
 		LibraryDTO lib = new LibraryDTO();
 		lib.name = ndkRoot.getFileName().toString();
 
-		// Create a fresh global scope to collect NDk symbols
+		// 1. INITIALIZE SHARED STATE
 		Scope global = new Scope(null);
+		Map<String, ClassSymbol> declaredClasses = new HashMap<>(); // Used to track all declared FQNs
+		List<ParseTree> trees = new ArrayList<>();
 
-		// Walk .neb files
+		// Define all primitive types into the shared global scope
+		BuiltInTypeLoader.definePrimitives(global); //
+
+		// 2. PARSE ALL FILES AND COLLECT TREES
 		List<Path> files = new ArrayList<>();
-		try (DirectoryStream<Path> ds = Files.newDirectoryStream(ndkRoot))
-		{
-			// no-op — we'll use walk below
-		}
 		Files.walk(ndkRoot)
 				.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".neb"))
 				.forEach(files::add);
@@ -58,9 +66,52 @@ public class NdkCompiler
 			var tokens = new CommonTokenStream(lexer);
 			var parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
-			// Build symbols using SymbolTableBuilder
-			SymbolTableBuilder builder = new SymbolTableBuilder(global);
+			trees.add(tree);
+		}
+
+		// =========================================================
+		// PASS 1: Symbol Table Building (Declaration)
+		// =========================================================
+		Debug.logDebug("NDK Build Pass 1: Declaring Symbols");
+		// Instantiate the SymbolTableBuilder ONCE with the shared state
+		SymbolTableBuilder builder = new SymbolTableBuilder(global, declaredClasses); //
+
+		for (int i = 0; i < files.size(); i++)
+		{
+			Path p = files.get(i);
+			ParseTree tree = trees.get(i);
+			Debug.logDebug("Declaring symbols for NDK file: " + p);
+			// Run on the shared global scope, collecting symbols from all files
 			builder.visit(tree);
+		}
+
+		// POST-PASS 1: Setup Global Aliases (as SemanticAnalyzer does)
+		if (declaredClasses.containsKey("nebula.core.String"))
+		{
+			Symbol stringSymbol = declaredClasses.get("nebula.core.String");
+			global.define(new AliasSymbol("string", stringSymbol)); // Create alias 'string' -> 'nebula.core.String'
+		}
+
+
+		// =========================================================
+		// PASS 2: Type Checking and Resolution (The TypeCheckVisitor)
+		// =========================================================
+		Debug.logDebug("NDK Build Pass 2: Semantic Analysis");
+		Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
+		Map<ParseTree, Type> resolvedTypes = new HashMap<>();
+		boolean hasErrors = builder.hasErrors(); // Start with errors from Pass 1
+
+		for (int i = 0; i < files.size(); i++)
+		{
+			Path p = files.get(i);
+			ParseTree tree = trees.get(i);
+			Debug.logDebug("Analyzing NDK file for Pass 2: " + p);
+
+			// Instantiate the TypeCheckVisitor with the fully populated shared state
+			TypeCheckVisitor refVisitor = new TypeCheckVisitor(global, declaredClasses, resolvedSymbols, resolvedTypes); //
+			refVisitor.visit(tree);
+
+			hasErrors = refVisitor.hasErrors();
 		}
 
 		// Convert the global scope into DTOs

@@ -11,20 +11,19 @@ public class ClassSymbol extends Scope implements Symbol
 	private final String name;
 	private final ClassType type;
 	private final Map<String, List<MethodSymbol>> methodsByName = new HashMap<>();
-	private boolean isNative = false;
 	private ClassSymbol superClass; // Added superclass field
 
-	public ClassSymbol(String name, Scope enclosingScope)
+	// Modifiers
+	private final boolean isNative;
+	private final boolean isPublic;
+
+	public ClassSymbol(String name, Scope enclosingScope, boolean isNative, boolean isPublic)
 	{
 		super(enclosingScope);
 		this.name = name;
 		this.type = new ClassType(this);
-	}
-
-	// Added setters and getters for modifiers and superclass
-	public void setNative(boolean isNative)
-	{
 		this.isNative = isNative;
+		this.isPublic = isPublic;
 	}
 
 	public boolean isNative()
@@ -96,5 +95,10 @@ public class ClassSymbol extends Scope implements Symbol
 	public ClassType getType()
 	{
 		return type;
+	}
+
+	public boolean isPublic()
+	{
+		return isPublic;
 	}
 }

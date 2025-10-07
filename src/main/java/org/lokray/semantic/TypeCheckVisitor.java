@@ -44,9 +44,15 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return hasErrors;
 	}
 
-	private void logError(Token token, String msg)
+	private void logError(org.antlr.v4.runtime.Token token, String msg)
 	{
-		String err = String.format("Semantic Error at line %d:%d - %s", token.getLine(), token.getCharPositionInLine() + 1, msg);
+		// New Format: [Semantic Error] current class name - line:char - msg
+		// Get the current class name or an empty string if not inside a class
+		String className = currentClass != null ? currentClass.getName() : "";
+
+		// Format the error string
+		String err = String.format("[Semantic Error] %s - line %d:%d - %s", className, token.getLine(), token.getCharPositionInLine() + 1, msg);
+
 		Debug.logError(err);
 		hasErrors = true;
 	}
@@ -116,10 +122,19 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 		if (symbol.isEmpty())
 		{
-			if (declaredClasses.containsKey(baseTypeName))
+			// FIRST: Try to find the FQN from the simple name, using existing helper
+			String fqn = findFqnForSimpleName(baseTypeName);
+
+			if (fqn != null)
+			{
+				symbol = Optional.of(declaredClasses.get(fqn));
+			}
+			// SECOND: Fallback to original check (in case baseTypeName was already an FQN)
+			else if (declaredClasses.containsKey(baseTypeName))
 			{
 				symbol = Optional.of(declaredClasses.get(baseTypeName));
 			}
+			// FINAL: If no luck, then it's truly an error
 			else
 			{
 				logError(ctx.start, "Undefined type: '" + baseTypeName + "'.");
@@ -191,7 +206,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	// --- Scope Management ---
-
 	@Override
 	public Type visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
 	{
@@ -608,7 +622,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			{
 				scopeToSearch = (Scope) currentSymbol;
 			}
-			else if(currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
+			else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
 			{
 				Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
 			}

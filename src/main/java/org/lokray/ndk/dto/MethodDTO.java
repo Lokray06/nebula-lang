@@ -7,6 +7,8 @@ public class MethodDTO
 {
 	public String name;
 	public boolean isStatic = false;
+	public boolean isNative = false;
+	public boolean isPublic = false;
 	public String returnType;
 	public List<String> paramTypes = new ArrayList<>();
 }

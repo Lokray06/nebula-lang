@@ -40,8 +40,14 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 	private void logError(org.antlr.v4.runtime.Token token, String msg)
 	{
-		String err = String.format("Semantic Error at line %d:%d - %s",
-				token.getLine(), token.getCharPositionInLine() + 1, msg);
+		// New Format: [Semantic Error] current class name - line:char - msg
+		// Get the current class name or an empty string if not inside a class
+		String className = currentClass != null ? currentClass.getName() : "";
+
+		// Format the error string
+		String err = String.format("[Semantic Error] %s - line %d:%d - %s",
+				className, token.getLine(), token.getCharPositionInLine() + 1, msg);
+
 		Debug.logError(err);
 		hasErrors = true;
 	}
@@ -108,36 +114,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		return baseType;
 	}
 
-	// Implemented import handling in the first pass
-	@Override
-	public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
-	{
-		String fqn = getFqn(ctx.qualifiedName());
-		Optional<Symbol> targetSymbol = root.resolvePath(fqn);
-
-		if (targetSymbol.isEmpty())
-		{
-			logError(ctx.qualifiedName().start, "Cannot resolve import target '" + fqn + "'.");
-			return null;
-		}
-
-		if (!(targetSymbol.get() instanceof ClassSymbol))
-		{
-			logError(ctx.qualifiedName().start, "Import target must be a class.");
-			return null;
-		}
-
-		String aliasName = targetSymbol.get().getName(); // Use the simple name of the class
-		if (currentScope.resolveLocally(aliasName).isPresent())
-		{
-			logError(ctx.qualifiedName().start, "Cannot import '" + fqn + "', a symbol named '" + aliasName + "' already exists.");
-			return null;
-		}
-
-		currentScope.define(new AliasSymbol(aliasName, targetSymbol.get()));
-		return null;
-	}
-
 	// Moved alias handling to the first pass
 	@Override
 	public Void visitAliasDeclaration(NebulaParser.AliasDeclarationContext ctx)
@@ -199,10 +175,37 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			logError(ctx.ID().getSymbol(), "Type '" + className + "' is already defined in this scope.");
 			return null;
 		}
-		ClassSymbol cs = new ClassSymbol(className, currentScope);
+		boolean isPublic = ctx.modifiers().getText().contains("public");
+		ClassSymbol cs = new ClassSymbol(className, currentScope, false, isPublic);
 
 		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
 		String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
+		declaredClasses.put(fqn, cs);
+
+		currentScope.define(cs);
+
+		ClassSymbol oldClass = currentClass;
+		currentClass = cs;
+		currentScope = cs;
+		visitChildren(ctx);
+		currentScope = currentScope.getEnclosingScope();
+		currentClass = oldClass;
+		return null;
+	}
+
+	@Override
+	public Void visitNativeClassDeclaration(NebulaParser.NativeClassDeclarationContext ctx)
+	{
+		String className = ctx.ID().getText();
+		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+		String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
+
+		boolean isPublic = false;
+		if (ctx.modifiers() != null)
+		{
+			isPublic = ctx.modifiers().getText().contains("public");
+		}
+		ClassSymbol cs = new ClassSymbol(ctx.ID().getText(), currentScope, true, isPublic);
 		declaredClasses.put(fqn, cs);
 
 		currentScope.define(cs);
@@ -235,7 +238,31 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		}
 		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false);
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false, false);
+		currentClass.defineMethod(ms);
+		return null;
+	}
+
+	@Override
+	public Void visitNativeMethodDeclaration(NebulaParser.NativeMethodDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
+			logError(ctx.ID().getSymbol(), "Method defined outside of a class.");
+			return null;
+		}
+		Type returnType = resolveTypeFromCtx(ctx.type());
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveTypeFromCtx(pCtx.type()));
+			}
+		}
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false, true);
 		currentClass.defineMethod(ms);
 		return null;
 	}
@@ -272,7 +299,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.start, "Property defined outside of a class.");
+			logError(ctx.ID().getSymbol(), "Field defined outside of a class.");
 			return null;
 		}
 		Type propType = resolveTypeFromCtx(ctx.type());
@@ -311,7 +338,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			}
 		}
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentClass.getType(), paramTypes, currentScope, false, isPublic, true);
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentClass.getType(), paramTypes, currentScope, false, isPublic, true, false);
 		currentClass.defineMethod(ms);
 		return null;
 	}

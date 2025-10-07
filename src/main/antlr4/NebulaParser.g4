@@ -339,6 +339,7 @@ primary
     |   NEW_KW type (L_PAREN_SYM argumentList? R_PAREN_SYM | L_BRACK_SYM expression R_BRACK_SYM)
     |   arrayInitializer
     |   tupleLiteral                     // Allow tuple literals
+    |   primitiveType                    // <--- ADD THIS LINE
     ;
 
 // An argument list that handles positional, named, and mixed arguments like C#.

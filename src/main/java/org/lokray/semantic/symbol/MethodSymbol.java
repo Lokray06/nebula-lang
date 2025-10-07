@@ -3,6 +3,7 @@ package org.lokray.semantic.symbol;
 
 import org.lokray.semantic.type.Type;
 
+import java.lang.invoke.MethodHandle;
 import java.util.List;
 
 public class MethodSymbol extends Scope implements Symbol
@@ -13,8 +14,9 @@ public class MethodSymbol extends Scope implements Symbol
 	private final boolean isStatic;
 	private final boolean isPublic;
 	private final boolean isConstructor;
+	private final boolean isNative;
 
-	public MethodSymbol(String name, Type returnType, List<Type> parameterTypes, Scope enclosingScope, boolean isStatic, boolean isPublic, boolean isConstructor)
+	public MethodSymbol(String name, Type returnType, List<Type> parameterTypes, Scope enclosingScope, boolean isStatic, boolean isPublic, boolean isConstructor, boolean isNative)
 	{
 		super(enclosingScope);
 		this.name = name;
@@ -23,6 +25,7 @@ public class MethodSymbol extends Scope implements Symbol
 		this.isStatic = isStatic;
 		this.isPublic = isPublic;
 		this.isConstructor = isConstructor;
+		this.isNative = isNative;
 	}
 
 	@Override
@@ -68,4 +71,6 @@ public class MethodSymbol extends Scope implements Symbol
 	{
 		return isConstructor;
 	}
+
+	public boolean isNative() { return isNative; }
 }

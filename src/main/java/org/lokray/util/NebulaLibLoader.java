@@ -47,8 +47,7 @@ public class NebulaLibLoader
 		String parentFqn = parent.getFqn();
 		for (ClassDTO cd : dto.classes)
 		{
-			ClassSymbol cs = new ClassSymbol(cd.name, parent);
-			cs.setNative(cd.isNative);
+			ClassSymbol cs = new ClassSymbol(cd.name, parent, cd.isNative, cd.isPublic);
 			parent.define(cs);
 
 			String classFqn = parentFqn.isEmpty() ? cd.name : parentFqn + "." + cd.name;
@@ -64,7 +63,8 @@ public class NebulaLibLoader
 				}
 				// Determine if it's a constructor by matching the name with the class name
 				boolean isConstructor = md.name.equals(cd.name);
-				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType, paramTypes, cs, md.isStatic, true, isConstructor);
+				boolean isNative = md.isNative;
+				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType, paramTypes, cs, md.isStatic, true, isConstructor, isNative);
 				cs.defineMethod(ms);
 			}
 			for (FieldDTO fd : cd.fields)

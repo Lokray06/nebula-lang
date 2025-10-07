@@ -60,7 +60,7 @@ public class Main
 			CommonTokenStream tokens = new CommonTokenStream(lexer);
 			NebulaParser parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
-			Debug.logInfo("Parse Tree:\n" + Trees.toStringTree(tree, parser));
+			Debug.logDebug("Parse Tree:\n" + Trees.toStringTree(tree, parser));
 
 			if (parser.getNumberOfSyntaxErrors() > 0)
 			{
