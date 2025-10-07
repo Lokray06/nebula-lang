@@ -239,10 +239,17 @@ switchBlock
 
 // --- Expressions (with precedence) ---
 
-// StatementExpression to limit which expressions can be statements
+// 1. New rule for just the assignment *part* of an expression statement
+//    Note: 'assignmentOperator' is not the simple EQUALS_SYM, but all compound ones as well.
+actualAssignment
+    :   (unaryExpression | postfixExpression) assignmentOperator expression
+    ;
+
 statementExpression
-    :   assignmentExpression
-    |   (unaryExpression | postfixExpression) // Allows ++x and x++
+    :   actualAssignment
+    |   (op=(INC_OP | DEC_OP) unaryExpression) // Only allow pre-inc/dec unary ops
+    |   postfixExpression (L_PAREN_SYM argumentList? R_PAREN_SYM) // Function/Method call
+    |   postfixExpression (INC_OP | DEC_OP) // Post-inc/dec
     ;
 
 expression
