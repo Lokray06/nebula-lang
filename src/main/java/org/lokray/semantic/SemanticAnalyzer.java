@@ -58,7 +58,13 @@ public class SemanticAnalyzer
 	public boolean analyze(ParseTree tree)
 	{
 		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members.
+		Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
 		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses);
+		Debug.logDebug("  Resolved types:");
+		for(ClassSymbol type : declaredClasses.values())
+		{
+			Debug.logDebug("    -" + type.getName());
+		}
 		defVisitor.visit(tree);
 
 		this.hasErrors = defVisitor.hasErrors();
@@ -68,6 +74,7 @@ public class SemanticAnalyzer
 		}
 
 		// Pass 3: Type Checking and Resolution for method bodies and initializers
+		Debug.logDebug("\nType checking...");
 		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes);
 		refVisitor.visit(tree);
 		this.hasErrors = refVisitor.hasErrors();

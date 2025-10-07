@@ -58,6 +58,7 @@ public class Main
 			CharStream input = CharStreams.fromFileName(filePath.toString());
 			NebulaLexer lexer = new NebulaLexer(input);
 			CommonTokenStream tokens = new CommonTokenStream(lexer);
+			Debug.logDebug("\nParsing...");
 			NebulaParser parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
 			Debug.logDebug("Parse Tree:\n" + Trees.toStringTree(tree, parser));
@@ -68,6 +69,7 @@ public class Main
 				return;
 			}
 
+			Debug.logDebug("\nSemantic analysis:");
 			SemanticAnalyzer analyzer = (useNdk != null) ? new SemanticAnalyzer(useNdk) : new SemanticAnalyzer();
 			boolean success = analyzer.analyze(tree);
 

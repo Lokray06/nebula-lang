@@ -114,6 +114,45 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		return baseType;
 	}
 
+	@Override
+	public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
+	{
+		String fqn = getFqn(ctx.qualifiedName());
+		String[] parts = fqn.split("\\.");
+		String simpleName = parts[parts.length - 1];
+
+		// Note: resolvePath might need to be implemented on your Scope/Symbol if it's
+		// not there, but it should resolve a multi-part name from the global scope.
+		// Let's assume `root` can find symbols from the FQN map `declaredClasses`.
+		Symbol targetSymbol = declaredClasses.get(fqn);
+
+		if (targetSymbol == null)
+		{
+			// Fallback for namespaces, etc., if not in declaredClasses
+			Optional<Symbol> resolved = root.resolvePath(fqn); // You may need to implement resolvePath
+			if (resolved.isEmpty())
+			{
+				logError(ctx.qualifiedName().start, "Cannot find type to import: '" + fqn + "'.");
+				return null;
+			}
+			targetSymbol = resolved.get();
+		}
+
+
+		// Check for conflicts in the current scope (e.g., the file's top-level scope)
+		if (currentScope.resolveLocally(simpleName).isPresent())
+		{
+			logError(ctx.qualifiedName().start, "A symbol named '" + simpleName + "' is already defined or imported in this scope.");
+			return null;
+		}
+
+		// Define an alias in the current scope.
+		// This effectively makes `Console` an alias for the `nebula.io.Console` ClassSymbol.
+		currentScope.define(new AliasSymbol(simpleName, targetSymbol));
+		Debug.logDebug("  Created import alias: " + simpleName + " -> " + fqn);
+		return null;
+	}
+
 	// Moved alias handling to the first pass
 	@Override
 	public Void visitAliasDeclaration(NebulaParser.AliasDeclarationContext ctx)
@@ -175,7 +214,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			logError(ctx.ID().getSymbol(), "Type '" + className + "' is already defined in this scope.");
 			return null;
 		}
-		boolean isPublic = ctx.modifiers().getText().contains("public");
+		boolean isPublic = ctx.modifiers() != null ? ctx.modifiers().getText().contains("public") : false;
 		ClassSymbol cs = new ClassSymbol(className, currentScope, false, isPublic);
 
 		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
