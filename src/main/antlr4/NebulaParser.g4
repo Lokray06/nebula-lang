@@ -75,9 +75,12 @@ nativeConstructorDeclaration
     :   NATIVE_KW modifiers? ID L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
     ;
 
-// RETAIN: Regular property (must have getter/setter blocks, even if empty/SEMI_SYM)
 propertyDeclaration
-    :   modifiers? type ID L_CURLY_SYM (GET_KW SEMI_SYM)? (SET_KW SEMI_SYM)? R_CURLY_SYM
+    : modifiers? type ID L_CURLY_SYM accessorDeclaration+ R_CURLY_SYM
+    ;
+
+accessorDeclaration
+    : (GET_KW | SET_KW) (block | SEMI_SYM)
     ;
 
 // NEW: Native property (no getter/setter body/block)
