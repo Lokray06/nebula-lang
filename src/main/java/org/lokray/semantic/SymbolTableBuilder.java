@@ -259,25 +259,54 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	}
 
 	@Override
-	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-	{
-		if (currentClass == null)
-		{
+	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx) {
+		if (currentClass == null) {
 			logError(ctx.ID().getSymbol(), "Method defined outside of a class.");
 			return null;
 		}
 		Type returnType = resolveTypeFromCtx(ctx.type());
-		List<Type> paramTypes = new ArrayList<>();
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				paramTypes.add(resolveTypeFromCtx(pCtx.type()));
+
+		// UPDATED: Build a list of ParameterSymbol
+		List<ParameterSymbol> params = new ArrayList<>();
+		if (ctx.parameterList() != null) {
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+				var pCtx = ctx.parameterList().parameter(i);
+				Type paramType = resolveTypeFromCtx(pCtx.type());
+				String paramName = pCtx.ID().getText();
+				// Capture the default value expression context if it exists
+				NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
+				params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
 			}
 		}
+
 		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false, false);
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, params, currentScope, isStatic, isPublic, false, false);
+		currentClass.defineMethod(ms);
+		return null;
+	}
+
+	@Override
+	public Void visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx) {
+		if (currentClass == null) {
+			logError(ctx.ID().getSymbol(), "Constructor defined outside of a class.");
+			return null;
+		}
+
+		// UPDATED: Build a list of ParameterSymbol
+		List<ParameterSymbol> params = new ArrayList<>();
+		if (ctx.parameterList() != null) {
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+				var pCtx = ctx.parameterList().parameter(i);
+				Type paramType = resolveTypeFromCtx(pCtx.type());
+				String paramName = pCtx.ID().getText();
+				NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
+				params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
+			}
+		}
+
+		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentClass.getType(), params, currentScope, false, isPublic, true, false);
 		currentClass.defineMethod(ms);
 		return null;
 	}
@@ -291,17 +320,21 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			return null;
 		}
 		Type returnType = resolveTypeFromCtx(ctx.type());
-		List<Type> paramTypes = new ArrayList<>();
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				paramTypes.add(resolveTypeFromCtx(pCtx.type()));
+
+		// UPDATED: Build a list of ParameterSymbol
+		List<ParameterSymbol> params = new ArrayList<>();
+		if (ctx.parameterList() != null) {
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+				var pCtx = ctx.parameterList().parameter(i);
+				Type paramType = resolveTypeFromCtx(pCtx.type());
+				String paramName = pCtx.ID().getText();
+				NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
+				params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
 			}
 		}
 		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, paramTypes, currentScope, isStatic, isPublic, false, true);
+		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, params, currentScope, isStatic, isPublic, false, true);
 		currentClass.defineMethod(ms);
 		return null;
 	}
@@ -357,28 +390,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		VariableSymbol vs = new VariableSymbol(propName, propType, isStatic, isPublic, false);
 		currentClass.define(vs);
-		return null;
-	}
-
-	@Override
-	public Void visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
-	{
-		if (currentClass == null)
-		{
-			logError(ctx.ID().getSymbol(), "Constructor defined outside of a class.");
-			return null;
-		}
-		List<Type> paramTypes = new ArrayList<>();
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				paramTypes.add(resolveTypeFromCtx(pCtx.type()));
-			}
-		}
-		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentClass.getType(), paramTypes, currentScope, false, isPublic, true, false);
-		currentClass.defineMethod(ms);
 		return null;
 	}
 

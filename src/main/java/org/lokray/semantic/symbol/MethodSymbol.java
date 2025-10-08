@@ -3,25 +3,27 @@ package org.lokray.semantic.symbol;
 
 import org.lokray.semantic.type.Type;
 
-import java.lang.invoke.MethodHandle;
 import java.util.List;
+import java.util.stream.Collectors; // NEW
 
 public class MethodSymbol extends Scope implements Symbol
 {
 	private final String name;
-	private Type returnType; // Made non-final
-	private List<Type> parameterTypes; // Made non-final
+	private Type returnType;
+	// UPDATED: Use a list of ParameterSymbol instead of just Type
+	private List<ParameterSymbol> parameters;
 	private final boolean isStatic;
 	private final boolean isPublic;
 	private final boolean isConstructor;
 	private final boolean isNative;
 
-	public MethodSymbol(String name, Type returnType, List<Type> parameterTypes, Scope enclosingScope, boolean isStatic, boolean isPublic, boolean isConstructor, boolean isNative)
+	public MethodSymbol(String name, Type returnType, List<ParameterSymbol> parameters, Scope enclosingScope,
+	                    boolean isStatic, boolean isPublic, boolean isConstructor, boolean isNative)
 	{
 		super(enclosingScope);
 		this.name = name;
 		this.returnType = returnType;
-		this.parameterTypes = parameterTypes;
+		this.parameters = parameters;
 		this.isStatic = isStatic;
 		this.isPublic = isPublic;
 		this.isConstructor = isConstructor;
@@ -40,21 +42,27 @@ public class MethodSymbol extends Scope implements Symbol
 		return returnType;
 	}
 
-	public List<Type> getParameterTypes()
+	// NEW: Getter for the new parameter list
+	public List<ParameterSymbol> getParameters()
 	{
-		return parameterTypes;
+		return parameters;
 	}
 
-	// Added setter
+	// UPDATED: This can be derived from the new list for compatibility
+	public List<Type> getParameterTypes()
+	{
+		return parameters.stream().map(Symbol::getType).collect(Collectors.toList());
+	}
+
 	public void setReturnType(Type returnType)
 	{
 		this.returnType = returnType;
 	}
 
-	// Added setter
-	public void setParameterTypes(List<Type> parameterTypes)
+	// UPDATED: Setter for the new parameter list
+	public void setParameters(List<ParameterSymbol> parameters)
 	{
-		this.parameterTypes = parameterTypes;
+		this.parameters = parameters;
 	}
 
 	public boolean isStatic()
@@ -72,5 +80,8 @@ public class MethodSymbol extends Scope implements Symbol
 		return isConstructor;
 	}
 
-	public boolean isNative() { return isNative; }
+	public boolean isNative()
+	{
+		return isNative;
+	}
 }

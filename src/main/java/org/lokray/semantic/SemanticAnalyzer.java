@@ -61,7 +61,7 @@ public class SemanticAnalyzer
 		Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
 		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses);
 		Debug.logDebug("  Resolved types:");
-		for(ClassSymbol type : declaredClasses.values())
+		for (ClassSymbol type : declaredClasses.values())
 		{
 			Debug.logDebug("    -" + type.getName());
 		}
@@ -91,7 +91,7 @@ public class SemanticAnalyzer
 				continue;
 			}
 
-			// Link Field Types
+			// Link Field Types (This part is already correct as VariableSymbol hasn't changed its core Type logic)
 			cs.getSymbols().values().stream()
 					.filter(sym -> sym instanceof VariableSymbol)
 					.map(sym -> (VariableSymbol) sym)
@@ -108,25 +108,23 @@ public class SemanticAnalyzer
 			{
 				for (MethodSymbol ms : overloads)
 				{
-					// Link return type
+					// 1. Link return type (This is correct)
 					if (ms.getType() instanceof UnresolvedType)
 					{
 						ms.setReturnType(resolveTypeByName(ms.getType().getName()));
 					}
-					// Link parameter types
-					List<Type> realParamTypes = new ArrayList<>();
-					for (Type paramType : ms.getParameterTypes())
+
+					// 2. Link parameter types (NEW LOGIC)
+					// Iterate through the ParameterSymbol list and update the Type object within each symbol.
+					for (ParameterSymbol ps : ms.getParameters())
 					{
-						if (paramType instanceof UnresolvedType)
+						if (ps.getType() instanceof UnresolvedType)
 						{
-							realParamTypes.add(resolveTypeByName(paramType.getName()));
-						}
-						else
-						{
-							realParamTypes.add(paramType);
+							// ParameterSymbol inherits setType from VariableSymbol,
+							// which is used to update the Type.
+							ps.setType(resolveTypeByName(ps.getType().getName()));
 						}
 					}
-					ms.setParameterTypes(realParamTypes);
 				}
 			}
 		}

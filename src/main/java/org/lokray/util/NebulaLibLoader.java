@@ -3,11 +3,7 @@ package org.lokray.util;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import org.lokray.ndk.dto.ClassDTO;
-import org.lokray.ndk.dto.FieldDTO;
-import org.lokray.ndk.dto.LibraryDTO;
-import org.lokray.ndk.dto.MethodDTO;
-import org.lokray.ndk.dto.NamespaceDTO;
+import org.lokray.ndk.dto.*;
 import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
@@ -56,15 +52,35 @@ public class NebulaLibLoader
 			for (MethodDTO md : cd.methods)
 			{
 				Type returnType = resolveTypeFromString(md.returnType, globalScope);
-				List<Type> paramTypes = new ArrayList<>();
-				for (String pt : md.paramTypes)
+
+				// Use the new ParameterDTO list
+				List<ParameterSymbol> params = new ArrayList<>();
+				for (int i = 0; i < md.parameters.size(); i++)
 				{
-					paramTypes.add(resolveTypeFromString(pt, globalScope));
+					ParameterDTO pd = md.parameters.get(i);
+					Type paramType = resolveTypeFromString(pd.type, globalScope);
+
+					// We now use the name from the DTO, not a dummy name
+					String paramName = pd.name;
+
+					// No ExpressionContext available for default value (pass null)
+					ParameterSymbol ps = new ParameterSymbol(paramName, paramType, i, null);
+					params.add(ps);
 				}
-				// Determine if it's a constructor by matching the name with the class name
+
 				boolean isConstructor = md.name.equals(cd.name);
 				boolean isNative = md.isNative;
-				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType, paramTypes, cs, md.isStatic, true, isConstructor, isNative);
+
+				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType,
+						params,
+						cs, md.isStatic, true, isConstructor, isNative);
+
+				// IMPORTANT: Define the parameters in the method's scope
+				for (ParameterSymbol ps : params)
+				{
+					ms.define(ps);
+				}
+
 				cs.defineMethod(ms);
 			}
 			for (FieldDTO fd : cd.fields)

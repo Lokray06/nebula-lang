@@ -10,5 +10,5 @@ public class MethodDTO
 	public boolean isNative = false;
 	public boolean isPublic = false;
 	public String returnType;
-	public List<String> paramTypes = new ArrayList<>();
+	public List<ParameterDTO> parameters = new ArrayList<>();
 }

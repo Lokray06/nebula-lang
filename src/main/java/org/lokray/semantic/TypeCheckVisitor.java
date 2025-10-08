@@ -1,7 +1,9 @@
 package org.lokray.semantic;
 
+import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.TerminalNode;
 import org.lokray.parser.NebulaParser;
 import org.lokray.parser.NebulaParserBaseVisitor;
 import org.lokray.semantic.symbol.*;
@@ -9,10 +11,7 @@ import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.type.*;
 import org.lokray.util.Debug;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 /**
  * This visitor performs the final pass, type-checking all expressions and resolving symbols.
@@ -250,8 +249,13 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 
-		// Resolve the specific constructor symbol
-		Optional<MethodSymbol> ctorOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
+		// FIX: Use resolveMethods(name) which returns the list of overloads for that name.
+		// Then, find the specific overload that matches this declaration's signature.
+		Optional<MethodSymbol> ctorOpt = ((ClassSymbol) currentScope).resolveMethods(ctx.ID().getText())
+				.stream()
+				.filter(m -> m.getParameterTypes().equals(paramTypes))
+				.findFirst();
+
 		if (ctorOpt.isEmpty())
 		{
 			logError(ctx.ID().getSymbol(), "Internal error: Constructor symbol not found during type checking.");
@@ -275,50 +279,142 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return null;
 	}
 
-    @Override
-    public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-    {
-        List<Type> paramTypes = new ArrayList<>();
-        if (ctx.parameterList() != null)
-        {
-            for (var pCtx : ctx.parameterList().parameter())
-            {
-                paramTypes.add(resolveType(pCtx.type()));
-            }
-        }
-        Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
-        if (methodOpt.isEmpty())
-        {
-            logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
-            return null;
-        }
-        currentMethod = methodOpt.get();
-        currentScope = currentMethod;
-        if (ctx.parameterList() != null)
-        {
-            for (var pCtx : ctx.parameterList().parameter())
-            {
-                visit(pCtx);
-            }
-        }
+	@Override
+	public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+	{
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveType(pCtx.type()));
+			}
+		}
 
-        // 1. Visit the method body (block) to perform type checking on its contents
-        visit(ctx.block());
+		// FIX: Use resolveMethods(name) which returns the list of overloads for that name.
+		// Then, find the specific overload that matches this declaration's signature.
+		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethods(ctx.ID().getText())
+				.stream()
+				.filter(m -> m.getParameterTypes().equals(paramTypes))
+				.findFirst();
 
-        // 2. Check for required return statement only for non-void, non-native methods
-        if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
-        {
-            // Check if the block has an unconditionally reachable return statement
-            if (!blockReturns(ctx.block()))
-            {
-                logError(ctx.block().start, "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
-            }
-        }
+		if (methodOpt.isEmpty())
+		{
+			logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
+			return null;
+		}
 
-        currentScope = currentScope.getEnclosingScope();
-        currentMethod = null;
-        return null;
-    }
+		currentMethod = methodOpt.get();
+		currentScope = currentMethod;
+
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				visit(pCtx);
+			}
+		}
+
+		// 1. Visit the method body (block) to perform type checking on its contents
+		visit(ctx.block());
+
+		// 2. Check for required return statement only for non-void, non-native methods
+		if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
+		{
+			if (!blockReturns(ctx.block()))
+			{
+				logError(ctx.block().start, "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
+			}
+		}
+
+		currentScope = currentScope.getEnclosingScope();
+		currentMethod = null;
+		return null;
+	}
+
+	/**
+	 * @param callCtx     The context for error reporting
+	 * @param classSymbol The class whose method we're calling
+	 * @param methodName  Name of the method/constructor
+	 * @param argListCtx  The arguments provided
+	 * @return return
+	 */
+	private Type visitMethodCall(ParserRuleContext callCtx, ClassSymbol classSymbol, String methodName, NebulaParser.ArgumentListContext argListCtx)
+	{
+		// 1. Separate arguments into positional and named
+		List<NebulaParser.ExpressionContext> positionalArgs = new ArrayList<>();
+		Map<String, NebulaParser.ExpressionContext> namedArgs = new HashMap<>();
+		if (argListCtx != null)
+		{
+			for (ParseTree child : argListCtx.children)
+			{
+				if (child instanceof NebulaParser.ExpressionContext)
+				{
+					// This check is needed because named arguments also contain an expression
+					if (child.getParent() instanceof NebulaParser.ArgumentListContext)
+					{
+						positionalArgs.add((NebulaParser.ExpressionContext) child);
+					}
+				}
+				else if (child instanceof NebulaParser.NamedArgumentContext)
+				{
+					NebulaParser.NamedArgumentContext namedArg = (NebulaParser.NamedArgumentContext) child;
+					String name = namedArg.ID().getText();
+					if (namedArgs.containsKey(name))
+					{
+						logError(namedArg.ID().getSymbol(), "Duplicate named argument '" + name + "'.");
+						return ErrorType.INSTANCE;
+					}
+					namedArgs.put(name, namedArg.expression());
+				}
+			}
+		}
+
+		// 2. Use the new resolution logic
+		Optional<MethodSymbol> resolvedMethodOpt = classSymbol.resolveOverload(methodName, positionalArgs, namedArgs);
+
+		if (resolvedMethodOpt.isEmpty())
+		{
+			logError(callCtx.start, "No suitable overload for method '" + methodName + "' found for class '" + classSymbol.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+		MethodSymbol resolvedMethod = resolvedMethodOpt.get();
+		note(callCtx, resolvedMethod); // Associate the call site with the specific method symbol
+
+		// 3. Type-check the provided arguments against the resolved method's parameters
+		List<ParameterSymbol> formalParams = resolvedMethod.getParameters();
+
+		// Check positional args
+		for (int i = 0; i < positionalArgs.size(); i++)
+		{
+			Type argType = visit(positionalArgs.get(i));
+			Type paramType = formalParams.get(i).getType();
+			if (!argType.isAssignableTo(paramType))
+			{
+				logError(positionalArgs.get(i).start, "Argument " + (i + 1) + ": cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
+			}
+		}
+
+		// Check named args
+		for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
+		{
+			String argName = entry.getKey();
+			NebulaParser.ExpressionContext argExpr = entry.getValue();
+			Type argType = visit(argExpr);
+
+			// We know the parameter exists from the resolution step
+			Optional<ParameterSymbol> paramOpt = formalParams.stream().filter(p -> p.getName().equals(argName)).findFirst();
+			if (paramOpt.isPresent())
+			{
+				Type paramType = paramOpt.get().getType();
+				if (!argType.isAssignableTo(paramType))
+				{
+					logError(argExpr.start, "Named argument '" + argName + "': cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
+				}
+			}
+		}
+		return resolvedMethod.getType();
+	}
 
 	@Override
 	public Type visitParameter(NebulaParser.ParameterContext ctx)
@@ -538,79 +634,79 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return PrimitiveType.VOID;
 	}
 
-    @Override
-    public Type visitIfStatement(NebulaParser.IfStatementContext ctx)
-    {
-        // 1. Type check the condition
-        Type conditionType = visit(ctx.expression());
+	@Override
+	public Type visitIfStatement(NebulaParser.IfStatementContext ctx)
+	{
+		// 1. Type check the condition
+		Type conditionType = visit(ctx.expression());
 
-        // Condition must be a boolean
-        if (conditionType != PrimitiveType.BOOLEAN && !(conditionType instanceof ErrorType))
-        {
-            logError(ctx.expression().start, "If statement condition must be of type 'boolean', but found '" + conditionType.getName() + "'.");
-        }
+		// Condition must be a boolean
+		if (conditionType != PrimitiveType.BOOLEAN && !(conditionType instanceof ErrorType))
+		{
+			logError(ctx.expression().start, "If statement condition must be of type 'boolean', but found '" + conditionType.getName() + "'.");
+		}
 
-        // 2. Traverse the 'if' branch (statement(0))
-        visit(ctx.statement(0));
+		// 2. Traverse the 'if' branch (statement(0))
+		visit(ctx.statement(0));
 
-        // 3. Traverse the 'else' branch if it exists (statement(1))
-        if (ctx.ELSE_KW() != null)
-        {
-            visit(ctx.statement(1));
-        }
+		// 3. Traverse the 'else' branch if it exists (statement(1))
+		if (ctx.ELSE_KW() != null)
+		{
+			visit(ctx.statement(1));
+		}
 
-        // An if statement itself does not have a return type
-        return PrimitiveType.VOID;
-    }
+		// An if statement itself does not have a return type
+		return PrimitiveType.VOID;
+	}
 
-    @Override
-    public Type visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
-    {
-        // A method must be in scope to have a return statement
-        if (currentMethod == null)
-        {
-            logError(ctx.start, "Return statement found outside of a method or constructor.");
-            return ErrorType.INSTANCE;
-        }
+	@Override
+	public Type visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
+	{
+		// A method must be in scope to have a return statement
+		if (currentMethod == null)
+		{
+			logError(ctx.start, "Return statement found outside of a method or constructor.");
+			return ErrorType.INSTANCE;
+		}
 
-        Type expectedReturnType = currentMethod.getType();
-        Type actualReturnType = PrimitiveType.VOID; // Default for 'return;'
+		Type expectedReturnType = currentMethod.getType();
+		Type actualReturnType = PrimitiveType.VOID; // Default for 'return;'
 
-        if (ctx.expression() != null)
-        {
-            actualReturnType = visit(ctx.expression());
-        }
+		if (ctx.expression() != null)
+		{
+			actualReturnType = visit(ctx.expression());
+		}
 
-        if (actualReturnType instanceof ErrorType)
-        {
-            return actualReturnType; // Propagate error
-        }
+		if (actualReturnType instanceof ErrorType)
+		{
+			return actualReturnType; // Propagate error
+		}
 
-        // Check for void method returning a value
-        if (expectedReturnType == PrimitiveType.VOID && actualReturnType != PrimitiveType.VOID)
-        {
-            logError(ctx.start, "Void method cannot return a value.");
-            return ErrorType.INSTANCE;
-        }
+		// Check for void method returning a value
+		if (expectedReturnType == PrimitiveType.VOID && actualReturnType != PrimitiveType.VOID)
+		{
+			logError(ctx.start, "Void method cannot return a value.");
+			return ErrorType.INSTANCE;
+		}
 
-        // Check for non-void method with 'return;' (implicitly returning void)
-        if (expectedReturnType != PrimitiveType.VOID && actualReturnType == PrimitiveType.VOID)
-        {
-            logError(ctx.start, "Method expects return type '" + expectedReturnType.getName() + "' but found 'return;' statement.");
-            return ErrorType.INSTANCE;
-        }
+		// Check for non-void method with 'return;' (implicitly returning void)
+		if (expectedReturnType != PrimitiveType.VOID && actualReturnType == PrimitiveType.VOID)
+		{
+			logError(ctx.start, "Method expects return type '" + expectedReturnType.getName() + "' but found 'return;' statement.");
+			return ErrorType.INSTANCE;
+		}
 
-        // Check assignability for non-void return types
-        if (expectedReturnType != PrimitiveType.VOID && !actualReturnType.isAssignableTo(expectedReturnType))
-        {
-            logError(ctx.expression().start, "Incompatible return type: cannot return '" + actualReturnType.getName() + "', expected '" + expectedReturnType.getName() + "'.");
-            return ErrorType.INSTANCE;
-        }
+		// Check assignability for non-void return types
+		if (expectedReturnType != PrimitiveType.VOID && !actualReturnType.isAssignableTo(expectedReturnType))
+		{
+			logError(ctx.expression().start, "Incompatible return type: cannot return '" + actualReturnType.getName() + "', expected '" + expectedReturnType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
 
-        // The type of the expression is what's being returned.
-        note(ctx, actualReturnType);
-        return actualReturnType;
-    }
+		// The type of the expression is what's being returned.
+		note(ctx, actualReturnType);
+		return actualReturnType;
+	}
 
 	// --- Expressions ---
 	// NEW: Visitor for tuple literals like (1, "a") or (Name: "a", Value: 1)
@@ -721,173 +817,237 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return true;
 	}
 
-    @Override
-    public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
-    {
-        Type currentType = visit(ctx.primary());
-        Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
+	@Override
+	public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
+	{
+		Type currentType = visit(ctx.primary());
+		Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
 
-        if (currentSymbol == null && currentType instanceof Symbol s)
-            currentSymbol = s;
+		int i = 1;
+		while (i < ctx.getChildCount())
+		{
+			if (currentType instanceof ErrorType)
+			{
+				return ErrorType.INSTANCE;
+			}
 
-        for (int i = 0; i < ctx.ID().size(); i++)
-        {
-            if (currentType instanceof ErrorType)
-                return ErrorType.INSTANCE;
+			ParseTree operator = ctx.getChild(i);
 
-            String memberName = ctx.ID(i).getText();
-            Scope scopeToSearch = null;
+			if (operator.getText().equals("."))
+			{
+				i++; // Move to the member ID
+				if (i >= ctx.getChildCount())
+				{
+					break; // Should not happen with valid grammar
+				}
+				String memberName = ctx.getChild(i).getText();
+				Scope scopeToSearch = null;
 
-            // Prefer the type's scope
-            if (currentType instanceof Scope s)
-                scopeToSearch = s;
-            else if (currentType instanceof ClassType ct)
-                scopeToSearch = ct.getClassSymbol();
-            else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
-                Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
-            else if (currentSymbol instanceof Scope s)
-                scopeToSearch = s;
+				if (currentType instanceof ClassType)
+				{
+					scopeToSearch = ((ClassType) currentType).getClassSymbol();
+				}
+				else if (currentType instanceof NamespaceType)
+				{
+					scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
+				}
+				else if (currentType instanceof TupleType)
+				{
+					scopeToSearch = (TupleType) currentType;
+				}
 
-            if (scopeToSearch == null)
-            {
-                logError(ctx.DOT_SYM(i).getSymbol(),
-                        "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'. " +
-                                "It is not a class, namespace, or tuple.");
-                return ErrorType.INSTANCE;
-            }
+				if (scopeToSearch == null)
+				{
+					logError(ctx.start, "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'.");
+					return ErrorType.INSTANCE;
+				}
 
-            Optional<Symbol> member = scopeToSearch.resolve(memberName);
-            if (member.isEmpty())
-            {
-                logError(ctx.ID(i).getSymbol(),
-                        "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
+				Optional<Symbol> memberOpt = scopeToSearch.resolve(memberName);
+				if (memberOpt.isEmpty())
+				{
+					logError(((TerminalNode) ctx.getChild(i)).getSymbol(), "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
+					return ErrorType.INSTANCE;
+				}
 
-            currentSymbol = member.get();
-            if (currentSymbol instanceof AliasSymbol alias)
-                currentSymbol = alias.getTargetSymbol();
+				currentSymbol = memberOpt.get();
+				if (currentSymbol instanceof AliasSymbol)
+				{
+					currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
+				}
+				currentType = currentSymbol.getType();
 
-            currentType = currentSymbol.getType();
-            if (currentType instanceof UnresolvedType unresolved)
-                currentType = resolveUnresolvedType(unresolved, ctx.ID(i).getSymbol());
-        }
+			}
+			else if (operator.getText().equals("("))
+			{
+				// This is a method call!
+				if (!(currentSymbol instanceof MethodSymbol))
+				{
+					logError(ctx.start, "'" + currentSymbol.getName() + "' is not a method and cannot be called.");
+					return ErrorType.INSTANCE;
+				}
 
-        if (currentSymbol != null) note(ctx, currentSymbol);
-        if (currentType != null) note(ctx, currentType);
-        return currentType;
-    }
+				// FIX: Cast to Scope to access getEnclosingScope()
+				Scope enclosingScope = ((Scope) currentSymbol).getEnclosingScope();
+				if (!(enclosingScope instanceof ClassSymbol))
+				{
+					logError(ctx.start, "Internal error: Method '" + currentSymbol.getName() + "' is not a member of a class.");
+					return ErrorType.INSTANCE;
+				}
+
+				ClassSymbol classOfMethod = (ClassSymbol) enclosingScope;
+				String methodName = currentSymbol.getName();
+
+				i++; // Move past '('
+				NebulaParser.ArgumentListContext argListCtx = null;
+				if (i < ctx.getChildCount() && ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
+				{
+					argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
+					i++; // Consume argument list
+				}
+
+				currentType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
+				currentSymbol = null; // Result of a method call is a value, not a named symbol
+
+			} // Add other postfix operators like ++, --, [] here
+
+			i++; // Move to the next operator
+		}
+
+		note(ctx, currentType);
+		if (currentSymbol != null)
+		{
+			note(ctx, currentSymbol);
+		}
+		return currentType;
+	}
+
+	@Override
+	public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx)
+	{
+		if (ctx.logicalAndExpression().size() > 1)
+		{
+			Type left = visit(ctx.logicalAndExpression(0));
+			Type right = visit(ctx.logicalAndExpression(1));
+
+			if (!left.isBoolean() || !right.isBoolean())
+			{
+				logError(ctx.LOG_OR_OP(0).getSymbol(), "Logical operator '||' can only be applied to boolean types.");
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.BOOLEAN);
+			return PrimitiveType.BOOLEAN;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitLogicalAndExpression(NebulaParser.LogicalAndExpressionContext ctx)
+	{
+		if (ctx.bitwiseOrExpression().size() > 1)
+		{
+			Type left = visit(ctx.bitwiseOrExpression(0));
+			Type right = visit(ctx.bitwiseOrExpression(1));
+
+			if (!left.isBoolean() || !right.isBoolean())
+			{
+				logError(ctx.LOG_AND_OP(0).getSymbol(), "Logical operator '&&' can only be applied to boolean types.");
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.BOOLEAN);
+			return PrimitiveType.BOOLEAN;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitEqualityExpression(NebulaParser.EqualityExpressionContext ctx)
+	{
+		if (ctx.relationalExpression().size() > 1)
+		{
+			Type left = visit(ctx.relationalExpression(0));
+			Type right = visit(ctx.relationalExpression(1));
+
+			// Basic check: Allow comparison if types are assignable to each other.
+			// A more robust implementation would check for common supertypes or interfaces.
+			if (!left.isAssignableTo(right) && !right.isAssignableTo(left))
+			{
+				logError(ctx.EQUAL_EQUAL_SYM(0).getSymbol(), "Operator cannot be applied to '" + left.getName() + "' and '" + right.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.BOOLEAN);
+			return PrimitiveType.BOOLEAN;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitRelationalExpression(NebulaParser.RelationalExpressionContext ctx)
+	{
+		if (ctx.shiftExpression().size() > 1)
+		{
+			Type left = visit(ctx.shiftExpression(0));
+			Type right = visit(ctx.shiftExpression(1));
+
+			// Relational operators typically apply only to numeric types.
+			if (!left.isNumeric() || !right.isNumeric())
+			{
+				logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+						"Relational operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.BOOLEAN);
+			return PrimitiveType.BOOLEAN;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
+	{
+		if (ctx.multiplicativeExpression().size() > 1)
+		{
+			Type left = visit(ctx.multiplicativeExpression(0));
+			Type right = visit(ctx.multiplicativeExpression(1));
+
+			// For simplicity, we'll require both to be numeric.
+			// A real implementation would handle string concatenation ('+').
+			if (!left.isNumeric() || !right.isNumeric())
+			{
+				logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+						"Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+			// Simple type promotion: if either is double, result is double, etc.
+			Type resultType = Type.getWiderType(left, right);
+			note(ctx, resultType);
+			return resultType;
+		}
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
+	{
+		if (ctx.powerExpression().size() > 1)
+		{
+			Type left = visit(ctx.powerExpression(0));
+			Type right = visit(ctx.powerExpression(1));
+
+			if (!left.isNumeric() || !right.isNumeric())
+			{
+				logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+						"Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+				return ErrorType.INSTANCE;
+			}
+			Type resultType = Type.getWiderType(left, right);
+			note(ctx, resultType);
+			return resultType;
+		}
+		return visitChildren(ctx);
+	}
 
 
-    @Override
-    public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx) {
-        if (ctx.logicalAndExpression().size() > 1) {
-            Type left = visit(ctx.logicalAndExpression(0));
-            Type right = visit(ctx.logicalAndExpression(1));
-
-            if (!left.isBoolean() || !right.isBoolean()) {
-                logError(ctx.LOG_OR_OP(0).getSymbol(), "Logical operator '||' can only be applied to boolean types.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
-        }
-        return visitChildren(ctx);
-    }
-
-    @Override
-    public Type visitLogicalAndExpression(NebulaParser.LogicalAndExpressionContext ctx) {
-        if (ctx.bitwiseOrExpression().size() > 1) {
-            Type left = visit(ctx.bitwiseOrExpression(0));
-            Type right = visit(ctx.bitwiseOrExpression(1));
-
-            if (!left.isBoolean() || !right.isBoolean()) {
-                logError(ctx.LOG_AND_OP(0).getSymbol(), "Logical operator '&&' can only be applied to boolean types.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
-        }
-        return visitChildren(ctx);
-    }
-
-    @Override
-    public Type visitEqualityExpression(NebulaParser.EqualityExpressionContext ctx) {
-        if (ctx.relationalExpression().size() > 1) {
-            Type left = visit(ctx.relationalExpression(0));
-            Type right = visit(ctx.relationalExpression(1));
-
-            // Basic check: Allow comparison if types are assignable to each other.
-            // A more robust implementation would check for common supertypes or interfaces.
-            if (!left.isAssignableTo(right) && !right.isAssignableTo(left)) {
-                logError(ctx.EQUAL_EQUAL_SYM(0).getSymbol(), "Operator cannot be applied to '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
-        }
-        return visitChildren(ctx);
-    }
-
-    @Override
-    public Type visitRelationalExpression(NebulaParser.RelationalExpressionContext ctx) {
-        if (ctx.shiftExpression().size() > 1) {
-            Type left = visit(ctx.shiftExpression(0));
-            Type right = visit(ctx.shiftExpression(1));
-
-            // Relational operators typically apply only to numeric types.
-            if (!left.isNumeric() || !right.isNumeric()) {
-                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Relational operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
-        }
-        return visitChildren(ctx);
-    }
-
-    @Override
-    public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx) {
-        if (ctx.multiplicativeExpression().size() > 1) {
-            Type left = visit(ctx.multiplicativeExpression(0));
-            Type right = visit(ctx.multiplicativeExpression(1));
-
-            // For simplicity, we'll require both to be numeric.
-            // A real implementation would handle string concatenation ('+').
-            if (!left.isNumeric() || !right.isNumeric()) {
-                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            // Simple type promotion: if either is double, result is double, etc.
-            Type resultType = Type.getWiderType(left, right);
-            note(ctx, resultType);
-            return resultType;
-        }
-        return visitChildren(ctx);
-    }
-
-    @Override
-    public Type visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx) {
-        if (ctx.powerExpression().size() > 1) {
-            Type left = visit(ctx.powerExpression(0));
-            Type right = visit(ctx.powerExpression(1));
-
-            if (!left.isNumeric() || !right.isNumeric()) {
-                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            Type resultType = Type.getWiderType(left, right);
-            note(ctx, resultType);
-            return resultType;
-        }
-        return visitChildren(ctx);
-    }
-
-
-    @Override
+	@Override
 	public Type visitCastExpression(NebulaParser.CastExpressionContext ctx)
 	{
 		// Resolve the target type from the grammar rule.
@@ -932,6 +1092,39 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitPrimary(NebulaParser.PrimaryContext ctx)
 	{
+		if (ctx.NEW_KW() != null)
+		{
+			// This is a constructor call: new Person(...)
+			Type type = resolveType(ctx.type());
+			if (!(type instanceof ClassType))
+			{
+				logError(ctx.type().start, "Can only instantiate a class type.");
+				return ErrorType.INSTANCE;
+			}
+			ClassSymbol classSymbol = ((ClassType) type).getClassSymbol();
+
+			// Handle constructor call: new Person(args)
+			if (ctx.L_PAREN_SYM() != null)
+			{
+				// We pass `ctx` itself for error reporting
+				visitMethodCall(ctx, classSymbol, classSymbol.getName(), ctx.argumentList());
+			}
+			// Handle array creation: new int[size]
+			else if (ctx.L_BRACK_SYM() != null)
+			{
+				Type sizeType = visit(ctx.expression());
+				if (!sizeType.isInteger())
+				{
+					logError(ctx.expression().start, "Array size must be an integer.");
+				}
+				// The type of `new int[5]` is `int[]`.
+				type = new ArrayType(type);
+			}
+
+			note(ctx, type);
+			return type;
+		}
+
 		if (ctx.ID() != null)
 		{
 			String name = ctx.ID().getText();
@@ -948,10 +1141,9 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 					logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context.");
 					return ErrorType.INSTANCE;
 				}
-				// 'this' refers to the current class instance.
 				Type thisType = currentClass.getType();
 				note(ctx, thisType);
-				note(ctx, new VariableSymbol("this", thisType, false, false, true)); // Create a symbol for 'this'
+				note(ctx, new VariableSymbol("this", thisType, false, false, true));
 				return thisType;
 			}
 
@@ -967,16 +1159,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			if (symbol instanceof AliasSymbol)
 			{
 				symbol = ((AliasSymbol) symbol).getTargetSymbol();
-			}
-
-			if (name.equals("this"))
-			{
-				if (currentClass == null)
-				{
-					logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context.");
-					return ErrorType.INSTANCE;
-				}
-				symbol = new VariableSymbol("this", currentClass.getType(), false, false, true);
 			}
 
 			note(ctx, symbol);
@@ -1000,6 +1182,26 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			note(ctx, exprType);
 			return exprType;
 		}
+
+		// This handles the new primitiveType in primary rule
+		if (ctx.primitiveType() != null)
+		{
+			String baseTypeName = ctx.primitiveType().getText();
+
+			// Find the symbol for the primitive type in the global scope
+			Optional<Symbol> symbolOpt = globalScope.resolve(baseTypeName);
+
+			if (symbolOpt.isEmpty())
+			{
+				logError(ctx.primitiveType().start, "Undefined primitive type: '" + baseTypeName + "'.");
+				return ErrorType.INSTANCE;
+			}
+
+			Type primitive = symbolOpt.get().getType();
+			note(ctx, primitive);
+			return primitive;
+		}
+
 		return visitChildren(ctx);
 	}
 
@@ -1087,68 +1289,70 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return expectedType;
 	}
 
-    /**
-     * Checks if a single statement context guarantees an unconditional return.
-     * @param ctx The StatementContext to check.
-     * @return true if the statement guarantees a return, false otherwise.
-     */
-    private boolean statementReturns(NebulaParser.StatementContext ctx)
-    {
-        // Case 1: The statement is a direct return.
-        if (ctx.returnStatement() != null)
-        {
-            return true;
-        }
+	/**
+	 * Checks if a single statement context guarantees an unconditional return.
+	 *
+	 * @param ctx The StatementContext to check.
+	 * @return true if the statement guarantees a return, false otherwise.
+	 */
+	private boolean statementReturns(NebulaParser.StatementContext ctx)
+	{
+		// Case 1: The statement is a direct return.
+		if (ctx.returnStatement() != null)
+		{
+			return true;
+		}
 
-        // Case 2: The statement is an IF-ELSE block.
-        if (ctx.ifStatement() != null)
-        {
-            NebulaParser.IfStatementContext ifCtx = ctx.ifStatement();
+		// Case 2: The statement is an IF-ELSE block.
+		if (ctx.ifStatement() != null)
+		{
+			NebulaParser.IfStatementContext ifCtx = ctx.ifStatement();
 
-            // For an IF statement to guarantee a return, it MUST have an 'else' clause.
-            if (ifCtx.ELSE_KW() == null)
-            {
-                return false;
-            }
+			// For an IF statement to guarantee a return, it MUST have an 'else' clause.
+			if (ifCtx.ELSE_KW() == null)
+			{
+				return false;
+			}
 
-            // Check the 'if' branch body (statement at index 0).
-            boolean ifBranchReturns = statementReturns(ifCtx.statement(0));
+			// Check the 'if' branch body (statement at index 0).
+			boolean ifBranchReturns = statementReturns(ifCtx.statement(0));
 
-            // Check the 'else' branch body (statement at index 1).
-            boolean elseBranchReturns = statementReturns(ifCtx.statement(1));
+			// Check the 'else' branch body (statement at index 1).
+			boolean elseBranchReturns = statementReturns(ifCtx.statement(1));
 
-            // Guarantees return only if BOTH branches guarantee a return.
-            return ifBranchReturns && elseBranchReturns;
-        }
+			// Guarantees return only if BOTH branches guarantee a return.
+			return ifBranchReturns && elseBranchReturns;
+		}
 
-        // Case 3: The statement is a block { ... } containing other statements.
-        if (ctx.block() != null)
-        {
-            return blockReturns(ctx.block());
-        }
+		// Case 3: The statement is a block { ... } containing other statements.
+		if (ctx.block() != null)
+		{
+			return blockReturns(ctx.block());
+		}
 
-        // Case 4: Other statements (e.g., assignment, loop) do not guarantee a return.
-        return false;
-    }
+		// Case 4: Other statements (e.g., assignment, loop) do not guarantee a return.
+		return false;
+	}
 
 
-    /**
-     * Checks if a block guarantees an unconditional return.
-     * @param ctx The BlockContext to check.
-     * @return true if the block is guaranteed to return, false otherwise.
-     */
-    private boolean blockReturns(NebulaParser.BlockContext ctx)
-    {
-        List<NebulaParser.StatementContext> statements = ctx.statement();
+	/**
+	 * Checks if a block guarantees an unconditional return.
+	 *
+	 * @param ctx The BlockContext to check.
+	 * @return true if the block is guaranteed to return, false otherwise.
+	 */
+	private boolean blockReturns(NebulaParser.BlockContext ctx)
+	{
+		List<NebulaParser.StatementContext> statements = ctx.statement();
 
-        if (statements.isEmpty())
-        {
-            return false;
-        }
+		if (statements.isEmpty())
+		{
+			return false;
+		}
 
-        // Only the very last statement needs to be checked for a guaranteed return.
-        var lastStatementCtx = statements.get(statements.size() - 1);
+		// Only the very last statement needs to be checked for a guaranteed return.
+		var lastStatementCtx = statements.get(statements.size() - 1);
 
-        return statementReturns(lastStatementCtx);
-    }
+		return statementReturns(lastStatementCtx);
+	}
 }

@@ -1,18 +1,19 @@
-// File: src/main/java/org/lokray/semantic/NamespaceSymbol.java
+// File: src/main/java/org/lokray/semantic/symbol/NamespaceSymbol.java
 package org.lokray.semantic.symbol;
 
-/**
- * Represents a named scope that acts like a package or namespace.
- * It is both a Symbol (it has a name) and a Scope (it contains other symbols).
- */
+import org.lokray.semantic.type.NamespaceType; // NEW
+import org.lokray.semantic.type.Type;          // NEW
+
 public class NamespaceSymbol extends Scope implements Symbol
 {
 	private final String name;
+	private final NamespaceType type; // NEW
 
 	public NamespaceSymbol(String name, Scope enclosingScope)
 	{
 		super(enclosingScope);
 		this.name = name;
+		this.type = new NamespaceType(this); // NEW
 	}
 
 	@Override
@@ -21,7 +22,13 @@ public class NamespaceSymbol extends Scope implements Symbol
 		return name;
 	}
 
-	// Added this method
+	// NEW: getType() implementation
+	@Override
+	public Type getType()
+	{
+		return type;
+	}
+
 	public String getFqn()
 	{
 		if (getEnclosingScope() instanceof NamespaceSymbol)

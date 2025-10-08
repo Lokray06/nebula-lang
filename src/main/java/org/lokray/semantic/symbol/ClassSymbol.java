@@ -1,6 +1,7 @@
 // File: src/main/java/org/lokray/semantic/ClassSymbol.java
 package org.lokray.semantic.symbol;
 
+import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.type.ClassType;
 import org.lokray.semantic.type.Type;
 
@@ -52,31 +53,88 @@ public class ClassSymbol extends Scope implements Symbol
 		return methodsByName.getOrDefault(name, new ArrayList<>());
 	}
 
-	// Added this method for overload resolution
-	public Optional<MethodSymbol> resolveMethod(String name, List<Type> argTypes)
+	// NEW: The advanced overload resolution method
+	public Optional<MethodSymbol> resolveOverload(
+			String name,
+			List<NebulaParser.ExpressionContext> positionalArgs,
+			Map<String, NebulaParser.ExpressionContext> namedArgs)
 	{
-		List<MethodSymbol> candidates = resolveMethods(name);
+
+		List<MethodSymbol> candidates = methodsByName.getOrDefault(name, new ArrayList<>());
+		List<MethodSymbol> viableCandidates = new ArrayList<>();
+
 		for (MethodSymbol candidate : candidates)
 		{
-			if (candidate.getParameterTypes().size() != argTypes.size())
+			List<ParameterSymbol> params = candidate.getParameters();
+			NebulaParser.ExpressionContext[] assignedArgs = new NebulaParser.ExpressionContext[params.size()];
+			boolean[] isAssigned = new boolean[params.size()];
+			boolean isViable = true;
+
+			// 1. Match positional arguments
+			if (positionalArgs.size() > params.size())
+			{
+				continue; // Too many positional args
+			}
+			for (int i = 0; i < positionalArgs.size(); i++)
+			{
+				assignedArgs[i] = positionalArgs.get(i);
+				isAssigned[i] = true;
+			}
+
+			// 2. Match named arguments
+			for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
+			{
+				String argName = entry.getKey();
+				Optional<ParameterSymbol> targetParam = params.stream()
+						.filter(p -> p.getName().equals(argName))
+						.findFirst();
+
+				if (targetParam.isEmpty())
+				{
+					isViable = false; // Parameter name does not exist in this overload
+					break;
+				}
+				int pos = targetParam.get().getPosition();
+				if (isAssigned[pos])
+				{
+					isViable = false; // Argument for this parameter was already provided positionally
+					break;
+				}
+				assignedArgs[pos] = entry.getValue();
+				isAssigned[pos] = true;
+			}
+			if (!isViable)
 			{
 				continue;
 			}
-			boolean allMatch = true;
-			for (int i = 0; i < argTypes.size(); i++)
+
+			// 3. Check if all non-default parameters have been assigned
+			for (int i = 0; i < params.size(); i++)
 			{
-				if (!argTypes.get(i).isAssignableTo(candidate.getParameterTypes().get(i)))
+				if (!isAssigned[i] && !params.get(i).hasDefaultValue())
 				{
-					allMatch = false;
+					isViable = false; // A required parameter was not provided
 					break;
 				}
 			}
-			if (allMatch)
+
+			if (isViable)
 			{
-				return Optional.of(candidate); // Found a match
+				viableCandidates.add(candidate);
 			}
 		}
-		return Optional.empty(); // No suitable overload found
+
+		// 4. Select the best candidate (for now, just the first viable one)
+		// A more advanced system could score candidates (e.g., fewer default values used is better)
+		if (viableCandidates.isEmpty())
+		{
+			return Optional.empty();
+		}
+		else
+		{
+			// TODO: Add ambiguity check if viableCandidates.size() > 1
+			return Optional.of(viableCandidates.get(0));
+		}
 	}
 
 	// Added this getter
