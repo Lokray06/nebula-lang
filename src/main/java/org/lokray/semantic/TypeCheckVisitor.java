@@ -275,37 +275,50 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return null;
 	}
 
-	@Override
-	public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-	{
-		List<Type> paramTypes = new ArrayList<>();
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				paramTypes.add(resolveType(pCtx.type()));
-			}
-		}
-		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
-		if (methodOpt.isEmpty())
-		{
-			logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
-			return null;
-		}
-		currentMethod = methodOpt.get();
-		currentScope = currentMethod;
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				visit(pCtx);
-			}
-		}
-		visit(ctx.block());
-		currentScope = currentScope.getEnclosingScope();
-		currentMethod = null;
-		return null;
-	}
+    @Override
+    public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+    {
+        List<Type> paramTypes = new ArrayList<>();
+        if (ctx.parameterList() != null)
+        {
+            for (var pCtx : ctx.parameterList().parameter())
+            {
+                paramTypes.add(resolveType(pCtx.type()));
+            }
+        }
+        Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethod(ctx.ID().getText(), paramTypes);
+        if (methodOpt.isEmpty())
+        {
+            logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
+            return null;
+        }
+        currentMethod = methodOpt.get();
+        currentScope = currentMethod;
+        if (ctx.parameterList() != null)
+        {
+            for (var pCtx : ctx.parameterList().parameter())
+            {
+                visit(pCtx);
+            }
+        }
+
+        // 1. Visit the method body (block) to perform type checking on its contents
+        visit(ctx.block());
+
+        // 2. Check for required return statement only for non-void, non-native methods
+        if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
+        {
+            // Check if the block has an unconditionally reachable return statement
+            if (!blockReturns(ctx.block()))
+            {
+                logError(ctx.block().start, "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
+            }
+        }
+
+        currentScope = currentScope.getEnclosingScope();
+        currentMethod = null;
+        return null;
+    }
 
 	@Override
 	public Type visitParameter(NebulaParser.ParameterContext ctx)
@@ -524,6 +537,80 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		currentScope = currentScope.getEnclosingScope();
 		return PrimitiveType.VOID;
 	}
+
+    @Override
+    public Type visitIfStatement(NebulaParser.IfStatementContext ctx)
+    {
+        // 1. Type check the condition
+        Type conditionType = visit(ctx.expression());
+
+        // Condition must be a boolean
+        if (conditionType != PrimitiveType.BOOLEAN && !(conditionType instanceof ErrorType))
+        {
+            logError(ctx.expression().start, "If statement condition must be of type 'boolean', but found '" + conditionType.getName() + "'.");
+        }
+
+        // 2. Traverse the 'if' branch (statement(0))
+        visit(ctx.statement(0));
+
+        // 3. Traverse the 'else' branch if it exists (statement(1))
+        if (ctx.ELSE_KW() != null)
+        {
+            visit(ctx.statement(1));
+        }
+
+        // An if statement itself does not have a return type
+        return PrimitiveType.VOID;
+    }
+
+    @Override
+    public Type visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
+    {
+        // A method must be in scope to have a return statement
+        if (currentMethod == null)
+        {
+            logError(ctx.start, "Return statement found outside of a method or constructor.");
+            return ErrorType.INSTANCE;
+        }
+
+        Type expectedReturnType = currentMethod.getType();
+        Type actualReturnType = PrimitiveType.VOID; // Default for 'return;'
+
+        if (ctx.expression() != null)
+        {
+            actualReturnType = visit(ctx.expression());
+        }
+
+        if (actualReturnType instanceof ErrorType)
+        {
+            return actualReturnType; // Propagate error
+        }
+
+        // Check for void method returning a value
+        if (expectedReturnType == PrimitiveType.VOID && actualReturnType != PrimitiveType.VOID)
+        {
+            logError(ctx.start, "Void method cannot return a value.");
+            return ErrorType.INSTANCE;
+        }
+
+        // Check for non-void method with 'return;' (implicitly returning void)
+        if (expectedReturnType != PrimitiveType.VOID && actualReturnType == PrimitiveType.VOID)
+        {
+            logError(ctx.start, "Method expects return type '" + expectedReturnType.getName() + "' but found 'return;' statement.");
+            return ErrorType.INSTANCE;
+        }
+
+        // Check assignability for non-void return types
+        if (expectedReturnType != PrimitiveType.VOID && !actualReturnType.isAssignableTo(expectedReturnType))
+        {
+            logError(ctx.expression().start, "Incompatible return type: cannot return '" + actualReturnType.getName() + "', expected '" + expectedReturnType.getName() + "'.");
+            return ErrorType.INSTANCE;
+        }
+
+        // The type of the expression is what's being returned.
+        note(ctx, actualReturnType);
+        return actualReturnType;
+    }
 
 	// --- Expressions ---
 	// NEW: Visitor for tuple literals like (1, "a") or (Name: "a", Value: 1)
@@ -918,4 +1005,69 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		note(ctx, expectedType);
 		return expectedType;
 	}
+
+    /**
+     * Checks if a single statement context guarantees an unconditional return.
+     * @param ctx The StatementContext to check.
+     * @return true if the statement guarantees a return, false otherwise.
+     */
+    private boolean statementReturns(NebulaParser.StatementContext ctx)
+    {
+        // Case 1: The statement is a direct return.
+        if (ctx.returnStatement() != null)
+        {
+            return true;
+        }
+
+        // Case 2: The statement is an IF-ELSE block.
+        if (ctx.ifStatement() != null)
+        {
+            NebulaParser.IfStatementContext ifCtx = ctx.ifStatement();
+
+            // For an IF statement to guarantee a return, it MUST have an 'else' clause.
+            if (ifCtx.ELSE_KW() == null)
+            {
+                return false;
+            }
+
+            // Check the 'if' branch body (statement at index 0).
+            boolean ifBranchReturns = statementReturns(ifCtx.statement(0));
+
+            // Check the 'else' branch body (statement at index 1).
+            boolean elseBranchReturns = statementReturns(ifCtx.statement(1));
+
+            // Guarantees return only if BOTH branches guarantee a return.
+            return ifBranchReturns && elseBranchReturns;
+        }
+
+        // Case 3: The statement is a block { ... } containing other statements.
+        if (ctx.block() != null)
+        {
+            return blockReturns(ctx.block());
+        }
+
+        // Case 4: Other statements (e.g., assignment, loop) do not guarantee a return.
+        return false;
+    }
+
+
+    /**
+     * Checks if a block guarantees an unconditional return.
+     * @param ctx The BlockContext to check.
+     * @return true if the block is guaranteed to return, false otherwise.
+     */
+    private boolean blockReturns(NebulaParser.BlockContext ctx)
+    {
+        List<NebulaParser.StatementContext> statements = ctx.statement();
+
+        if (statements.isEmpty())
+        {
+            return false;
+        }
+
+        // Only the very last statement needs to be checked for a guaranteed return.
+        var lastStatementCtx = statements.get(statements.size() - 1);
+
+        return statementReturns(lastStatementCtx);
+    }
 }
