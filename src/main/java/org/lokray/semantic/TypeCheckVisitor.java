@@ -721,90 +721,63 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return true;
 	}
 
-	// UPDATED: Handle member access on tuples (e.g., t.Item1, t.Sum)
-	@Override
-	public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
-	{
-		Type currentType = visit(ctx.primary());
-		Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
+    @Override
+    public Type visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
+    {
+        Type currentType = visit(ctx.primary());
+        Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
 
-		for (int i = 0; i < ctx.ID().size(); i++)
-		{
-			if (currentType instanceof ErrorType)
-			{
-				return ErrorType.INSTANCE;
-			}
+        if (currentSymbol == null && currentType instanceof Symbol s)
+            currentSymbol = s;
 
-			String memberName = ctx.ID(i).getText();
-			Scope scopeToSearch = null;
+        for (int i = 0; i < ctx.ID().size(); i++)
+        {
+            if (currentType instanceof ErrorType)
+                return ErrorType.INSTANCE;
 
-			if (currentSymbol instanceof Scope)
-			{
-				scopeToSearch = (Scope) currentSymbol;
-			}
-			else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
-			{
-				Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
-			}
-			else if (currentType instanceof ClassType)
-			{
-				scopeToSearch = ((ClassType) currentType).getClassSymbol();
-			}
-			else if (currentType.isTuple())
-			{ // Handle tuples
-				scopeToSearch = (Scope) currentType;
-			}
+            String memberName = ctx.ID(i).getText();
+            Scope scopeToSearch = null;
 
+            // Prefer the type's scope
+            if (currentType instanceof Scope s)
+                scopeToSearch = s;
+            else if (currentType instanceof ClassType ct)
+                scopeToSearch = ct.getClassSymbol();
+            else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
+                Debug.logWarning("[PENDING ERROR] To implement: arrays and string's size property");
+            else if (currentSymbol instanceof Scope s)
+                scopeToSearch = s;
 
-			// Crappy fix
-			/*
-			// Handle .size for arrays and .length for strings
-			else if (currentType.isArray() || (currentType instanceof ClassType && currentType.getName().equals("string")))
-			{
-				Scope tempScope = new Scope(null);
-				Type intType = globalScope.resolve("int").orElseThrow().getType();
-				if (currentType.isArray())
-				{
-					tempScope.define(new VariableSymbol("size", intType, false, true, true)); // read-only public property
-				}
-				if (currentType instanceof ClassType && currentType.getName().equals("string"))
-				{
-					tempScope.define(new VariableSymbol("length", intType, false, true, true)); // read-only public property
-				}
-				scopeToSearch = tempScope;
-			}
-			*/
+            if (scopeToSearch == null)
+            {
+                logError(ctx.DOT_SYM(i).getSymbol(),
+                        "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'. " +
+                                "It is not a class, namespace, or tuple.");
+                return ErrorType.INSTANCE;
+            }
 
-			if (scopeToSearch == null)
-			{
-				logError(ctx.DOT_SYM(i).getSymbol(), "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'. It is not a class, namespace, or tuple.");
-				return ErrorType.INSTANCE;
-			}
+            Optional<Symbol> member = scopeToSearch.resolve(memberName);
+            if (member.isEmpty())
+            {
+                logError(ctx.ID(i).getSymbol(),
+                        "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
 
-			Optional<Symbol> member = scopeToSearch.resolve(memberName);
-			if (member.isEmpty())
-			{
-				logError(ctx.ID(i).getSymbol(), "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
-				return ErrorType.INSTANCE;
-			}
+            currentSymbol = member.get();
+            if (currentSymbol instanceof AliasSymbol alias)
+                currentSymbol = alias.getTargetSymbol();
 
-			currentSymbol = member.get();
-			if (currentSymbol instanceof AliasSymbol)
-			{
-				currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
-			}
+            currentType = currentSymbol.getType();
+            if (currentType instanceof UnresolvedType unresolved)
+                currentType = resolveUnresolvedType(unresolved, ctx.ID(i).getSymbol());
+        }
 
-			currentType = currentSymbol.getType();
-			if (currentType instanceof UnresolvedType)
-			{
-				currentType = resolveUnresolvedType((UnresolvedType) currentType, ctx.ID(i).getSymbol());
-			}
-		}
+        if (currentSymbol != null) note(ctx, currentSymbol);
+        if (currentType != null) note(ctx, currentType);
+        return currentType;
+    }
 
-		note(ctx, currentSymbol);
-		note(ctx, currentType);
-		return currentType;
-	}
 
     @Override
     public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx) {
