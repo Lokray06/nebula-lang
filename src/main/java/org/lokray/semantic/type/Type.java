@@ -20,6 +20,11 @@ public interface Type extends Symbol
 		return false;
 	}
 
+    default boolean isBoolean()
+	{
+		return false;
+	}
+
 	default boolean isTuple()
 	{
 		return false;
@@ -34,4 +39,6 @@ public interface Type extends Symbol
 	{
 		return false;
 	}
+
+    static Type getWiderType(Type a, Type b) { return PrimitiveType.getWiderType(a, b); }
 }

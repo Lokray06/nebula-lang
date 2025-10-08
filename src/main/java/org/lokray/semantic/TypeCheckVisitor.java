@@ -806,7 +806,115 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return currentType;
 	}
 
-	@Override
+    @Override
+    public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx) {
+        if (ctx.logicalAndExpression().size() > 1) {
+            Type left = visit(ctx.logicalAndExpression(0));
+            Type right = visit(ctx.logicalAndExpression(1));
+
+            if (!left.isBoolean() || !right.isBoolean()) {
+                logError(ctx.LOG_OR_OP(0).getSymbol(), "Logical operator '||' can only be applied to boolean types.");
+                return ErrorType.INSTANCE;
+            }
+            note(ctx, PrimitiveType.BOOLEAN);
+            return PrimitiveType.BOOLEAN;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public Type visitLogicalAndExpression(NebulaParser.LogicalAndExpressionContext ctx) {
+        if (ctx.bitwiseOrExpression().size() > 1) {
+            Type left = visit(ctx.bitwiseOrExpression(0));
+            Type right = visit(ctx.bitwiseOrExpression(1));
+
+            if (!left.isBoolean() || !right.isBoolean()) {
+                logError(ctx.LOG_AND_OP(0).getSymbol(), "Logical operator '&&' can only be applied to boolean types.");
+                return ErrorType.INSTANCE;
+            }
+            note(ctx, PrimitiveType.BOOLEAN);
+            return PrimitiveType.BOOLEAN;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public Type visitEqualityExpression(NebulaParser.EqualityExpressionContext ctx) {
+        if (ctx.relationalExpression().size() > 1) {
+            Type left = visit(ctx.relationalExpression(0));
+            Type right = visit(ctx.relationalExpression(1));
+
+            // Basic check: Allow comparison if types are assignable to each other.
+            // A more robust implementation would check for common supertypes or interfaces.
+            if (!left.isAssignableTo(right) && !right.isAssignableTo(left)) {
+                logError(ctx.EQUAL_EQUAL_SYM(0).getSymbol(), "Operator cannot be applied to '" + left.getName() + "' and '" + right.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            note(ctx, PrimitiveType.BOOLEAN);
+            return PrimitiveType.BOOLEAN;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public Type visitRelationalExpression(NebulaParser.RelationalExpressionContext ctx) {
+        if (ctx.shiftExpression().size() > 1) {
+            Type left = visit(ctx.shiftExpression(0));
+            Type right = visit(ctx.shiftExpression(1));
+
+            // Relational operators typically apply only to numeric types.
+            if (!left.isNumeric() || !right.isNumeric()) {
+                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+                        "Relational operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            note(ctx, PrimitiveType.BOOLEAN);
+            return PrimitiveType.BOOLEAN;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx) {
+        if (ctx.multiplicativeExpression().size() > 1) {
+            Type left = visit(ctx.multiplicativeExpression(0));
+            Type right = visit(ctx.multiplicativeExpression(1));
+
+            // For simplicity, we'll require both to be numeric.
+            // A real implementation would handle string concatenation ('+').
+            if (!left.isNumeric() || !right.isNumeric()) {
+                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            // Simple type promotion: if either is double, result is double, etc.
+            Type resultType = Type.getWiderType(left, right);
+            note(ctx, resultType);
+            return resultType;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public Type visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx) {
+        if (ctx.powerExpression().size() > 1) {
+            Type left = visit(ctx.powerExpression(0));
+            Type right = visit(ctx.powerExpression(1));
+
+            if (!left.isNumeric() || !right.isNumeric()) {
+                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            Type resultType = Type.getWiderType(left, right);
+            note(ctx, resultType);
+            return resultType;
+        }
+        return visitChildren(ctx);
+    }
+
+
+    @Override
 	public Type visitCastExpression(NebulaParser.CastExpressionContext ctx)
 	{
 		// Resolve the target type from the grammar rule.

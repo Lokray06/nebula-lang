@@ -203,7 +203,12 @@ public class PrimitiveType implements Type
 		}
 	}
 
-	public Symbol resolveStaticProperty(String name)
+    @Override
+    public boolean isBoolean() {
+        return this.equals(BOOLEAN);
+    }
+
+    public Symbol resolveStaticProperty(String name)
 	{
 		return staticProperties.get(name);
 	}
@@ -217,7 +222,7 @@ public class PrimitiveType implements Type
 		return getCanonicalType(typeA).equals(getCanonicalType(typeB));
 	}
 
-	private static PrimitiveType getCanonicalType(PrimitiveType type)
+    private static PrimitiveType getCanonicalType(PrimitiveType type)
 	{
 		if (type.equals(INT8) || type.equals(BYTE_SPE_T))
 		{
@@ -253,4 +258,39 @@ public class PrimitiveType implements Type
 		}
 		return type;
 	}
+
+    public static Type getWiderType(Type a, Type b)
+    {
+        // If both are exactly the same type, return it
+        if (a.equals(b)) return a;
+
+        // Only handle primitive types for now
+        if (!(a instanceof PrimitiveType pa) || !(b instanceof PrimitiveType pb))
+        {
+            // For non-primitives, no widening — just return an error or one of them
+            return a.isAssignableTo(b) ? b : (b.isAssignableTo(a) ? a : ErrorType.INSTANCE);
+        }
+
+        // If one can be assigned to the other, the wider type is the one it can be assigned to.
+        if (pa.isAssignableTo(pb))
+        {
+            return pb;
+        }
+        if (pb.isAssignableTo(pa))
+        {
+            return pa;
+        }
+
+        // If neither can widen to the other, choose a fallback — for numeric types, prefer float/double
+        if (pa.isNumeric() && pb.isNumeric())
+        {
+            if (pa.equals(DOUBLE) || pb.equals(DOUBLE)) return DOUBLE;
+            if (pa.equals(FLOAT) || pb.equals(FLOAT)) return FLOAT;
+            if (pa.equals(LONG) || pb.equals(LONG)) return LONG;
+            if (pa.equals(INT) || pb.equals(INT)) return INT;
+        }
+
+        // Otherwise, incompatible types
+        return ErrorType.INSTANCE;
+    }
 }
