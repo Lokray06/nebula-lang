@@ -122,7 +122,7 @@ methodDeclaration
 
 // RETAIN variableDeclarator (used by fieldDeclaration)
 variableDeclarator
-    :   ID (EQUALS_SYM expression)?
+    :  ID (EQUALS_SYM expression)?
     ;
 
 modifiers
@@ -184,7 +184,7 @@ statement
     ;
 
 variableDeclaration
-    :   type variableDeclarator (COMMA_SYM variableDeclarator)*
+    :   (modifiers)? type variableDeclarator (COMMA_SYM variableDeclarator)*
     ;
 
 ifStatement
