@@ -57,74 +57,127 @@ public class ClassSymbol extends Scope implements Symbol {
         return methodsByName.getOrDefault(name, new ArrayList<>());
     }
 
-    // NEW: The advanced overload resolution method
-    public Optional<MethodSymbol> resolveOverload(
+    /**
+     * Return the list of overload candidates that are viable for the given
+     * positional and named arguments (parameter matching only). This does not
+     * consider return-type — it only checks positional/named/default parameter viability.
+     */
+    public List<MethodSymbol> findViableMethods(
             String name,
             List<NebulaParser.ExpressionContext> positionalArgs,
-            Map<String, NebulaParser.ExpressionContext> namedArgs) {
-
+            Map<String, NebulaParser.ExpressionContext> namedArgs)
+    {
         List<MethodSymbol> candidates = methodsByName.getOrDefault(name, new ArrayList<>());
         List<MethodSymbol> viableCandidates = new ArrayList<>();
 
-        for (MethodSymbol candidate : candidates) {
+        for (MethodSymbol candidate : candidates)
+        {
             List<ParameterSymbol> params = candidate.getParameters();
             NebulaParser.ExpressionContext[] assignedArgs = new NebulaParser.ExpressionContext[params.size()];
             boolean[] isAssigned = new boolean[params.size()];
             boolean isViable = true;
 
-            // 1. Match positional arguments
-            if (positionalArgs.size() > params.size()) {
-                continue; // Too many positional args
+            // Too many positional args -> skip
+            if (positionalArgs.size() > params.size())
+            {
+                continue;
             }
-            for (int i = 0; i < positionalArgs.size(); i++) {
+
+            // Assign positional args
+            for (int i = 0; i < positionalArgs.size(); i++)
+            {
                 assignedArgs[i] = positionalArgs.get(i);
                 isAssigned[i] = true;
             }
 
-            // 2. Match named arguments
-            for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet()) {
+            // Assign named args
+            for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
+            {
                 String argName = entry.getKey();
                 Optional<ParameterSymbol> targetParam = params.stream()
                         .filter(p -> p.getName().equals(argName))
                         .findFirst();
 
-                if (targetParam.isEmpty()) {
-                    isViable = false; // Parameter name does not exist in this overload
+                if (targetParam.isEmpty())
+                {
+                    isViable = false; // unknown named argument for this candidate
                     break;
                 }
                 int pos = targetParam.get().getPosition();
-                if (isAssigned[pos]) {
-                    isViable = false; // Argument for this parameter was already provided positionally
+                if (isAssigned[pos])
+                {
+                    isViable = false; // duplicate assignment to same param
                     break;
                 }
                 assignedArgs[pos] = entry.getValue();
                 isAssigned[pos] = true;
             }
-            if (!isViable) {
+            if (!isViable)
+            {
                 continue;
             }
 
-            // 3. Check if all non-default parameters have been assigned
-            for (int i = 0; i < params.size(); i++) {
-                if (!isAssigned[i] && !params.get(i).hasDefaultValue()) {
-                    isViable = false; // A required parameter was not provided
+            // Check required parameters have assignments (or defaults)
+            for (int i = 0; i < params.size(); i++)
+            {
+                if (!isAssigned[i] && !params.get(i).hasDefaultValue())
+                {
+                    isViable = false;
                     break;
                 }
             }
 
-            if (isViable) {
+            if (isViable)
+            {
                 viableCandidates.add(candidate);
             }
         }
 
-        // 4. Select the best candidate (for now, just the first viable one)
-        // A more advanced system could score candidates (e.g., fewer default values used is better)
-        if (viableCandidates.isEmpty()) {
+        return viableCandidates;
+    }
+
+    /**
+     * Old API kept: resolveOverload. Now it relies on findViableMethods and
+     * performs ambiguity detection (different return types -> ambiguous).
+     */
+    public Optional<MethodSymbol> resolveOverload(
+            String name,
+            List<NebulaParser.ExpressionContext> positionalArgs,
+            Map<String, NebulaParser.ExpressionContext> namedArgs)
+    {
+        List<MethodSymbol> viableCandidates = findViableMethods(name, positionalArgs, namedArgs);
+
+        if (viableCandidates.isEmpty())
+        {
             return Optional.empty();
-        } else {
-            // TODO: Add ambiguity check if viableCandidates.size() > 1
+        }
+        if (viableCandidates.size() == 1)
+        {
             return Optional.of(viableCandidates.get(0));
         }
+
+        // Multiple viable candidates: if they all have identical return type, pick the first;
+        // otherwise it's a true ambiguity (differing return types) and we signal that by returning empty (and emit error).
+        Type firstType = viableCandidates.get(0).getType();
+        boolean allSameReturn = true;
+        for (MethodSymbol m : viableCandidates)
+        {
+            if (!m.getType().equals(firstType))
+            {
+                allSameReturn = false;
+                break;
+            }
+        }
+
+        if (allSameReturn)
+        {
+            return Optional.of(viableCandidates.get(0));
+        }
+
+        // Ambiguity: multiple viable overloads with different return types
+        System.err.println("[Semantic Error] Ambiguous method call: multiple overloads of '"
+                + name + "' match this argument list.");
+        return Optional.empty();
     }
 
     public Optional<MethodSymbol> resolveMethodByReturnType(String name, Type expectedReturnType) {

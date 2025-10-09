@@ -23,9 +23,10 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	private Scope currentScope;
 	private ClassSymbol currentClass;
 	private MethodSymbol currentMethod;
+    private Type expectedType = null;
 	private boolean hasErrors = false;
 
-	private final Map<String, ClassSymbol> declaredClasses;
+    private final Map<String, ClassSymbol> declaredClasses;
 	private final Map<ParseTree, Symbol> resolvedSymbols;
 	private final Map<ParseTree, Type> resolvedTypes;
 
@@ -332,8 +333,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         {
             if (!blockReturns(ctx.block()))
             {
-                logError(ctx.block().start,
-                        "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
+                logError(ctx.block().start, "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
             }
         }
 
@@ -342,14 +342,12 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         return declaredReturnType;
     }
 
-	/**
-	 * @param callCtx     The context for error reporting
-	 * @param classSymbol The class whose method we're calling
-	 * @param methodName  Name of the method/constructor
-	 * @param argListCtx  The arguments provided
-	 * @return return
-	 *
-     * Handles method calls, supporting named/positional args and overloads by parameters and return type.
+    /**
+     * @param callCtx     The context for error reporting
+     * @param classSymbol The class whose method we're calling
+     * @param methodName  Name of the method/constructor
+     * @param argListCtx  The arguments provided
+     * @return return
      */
     private Type visitMethodCall(ParserRuleContext callCtx, ClassSymbol classSymbol, String methodName, NebulaParser.ArgumentListContext argListCtx)
     {
@@ -382,36 +380,66 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             }
         }
 
-        // 2. Determine expected return type from the surrounding context (if available)
-        // If your visitor tracks expectedType, use it; otherwise, default to UNKNOWN
-        Type expectedReturnType = null;
+        // 2. Collect viable candidates (parameter/argument matching only)
+        List<MethodSymbol> viableCandidates = classSymbol.findViableMethods(methodName, positionalArgs, namedArgs);
 
-        // 3. Try resolve by return type first, fallback to normal overloads
-        Optional<MethodSymbol> resolvedMethodOpt = resolveMethodWithReturnType(
-                classSymbol,
-                methodName,
-                positionalArgs,
-                namedArgs,
-                expectedReturnType
-        );
-
-        if (resolvedMethodOpt.isEmpty())
+        if (viableCandidates.isEmpty())
         {
             logError(callCtx.start, "No suitable overload for method '" + methodName + "' found for class '" + classSymbol.getName() + "'.");
             return ErrorType.INSTANCE;
         }
 
-        MethodSymbol resolvedMethod = resolvedMethodOpt.get();
-        note(callCtx, resolvedMethod); // Associate call site with the specific method symbol
+        // 3. If we have an expected return type (from cast, assignment, return, binary context) prefer matches
+        MethodSymbol resolvedMethod = null;
+        if (expectedType != null && expectedType != PrimitiveType.VOID && !(expectedType instanceof ErrorType))
+        {
+            List<MethodSymbol> matchesByReturn = new ArrayList<>();
+            for (MethodSymbol m : viableCandidates)
+            {
+                if (m.getType().equals(expectedType))
+                {
+                    matchesByReturn.add(m);
+                }
+            }
 
-        // 4. Type-check provided arguments vs the resolved method parameters
+            if (matchesByReturn.size() == 1)
+            {
+                resolvedMethod = matchesByReturn.get(0);
+            }
+            else if (matchesByReturn.size() > 1)
+            {
+                // multiple viable overloads with the same return type -> ambiguous
+                logError(callCtx.start, "Ambiguous method call: multiple overloads of '" + methodName + "' match this argument list and expected return type '" + expectedType.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            // else no candidates matched the expected return type - fall back to normal resolution below
+        }
+
+        // 4. If unresolved yet, use the normal overload resolution (which detects ambiguity by param matching)
+        if (resolvedMethod == null)
+        {
+            Optional<MethodSymbol> fromResolver = classSymbol.resolveOverload(methodName, positionalArgs, namedArgs);
+            if (fromResolver.isEmpty())
+            {
+                // resolveOverload already prints ambiguity message if needed; report the "no suitable overload" error too
+                logError(callCtx.start, "No suitable overload for method '" + methodName + "' found for class '" + classSymbol.getName() + "'.");
+                return ErrorType.INSTANCE;
+            }
+            resolvedMethod = fromResolver.get();
+        }
+
+        // 5. Remember resolved method (call-site annotation)
+        note(callCtx, resolvedMethod);
+
+        // 6. Type-check provided arguments against the resolved method's parameters
         List<ParameterSymbol> formalParams = resolvedMethod.getParameters();
 
         // Check positional args
         for (int i = 0; i < positionalArgs.size(); i++)
         {
-            Type argType = visit(positionalArgs.get(i));
+            // Let the argument expression know the parameter type it should produce for better nested resolution
             Type paramType = formalParams.get(i).getType();
+            Type argType = visitExpecting(positionalArgs.get(i), paramType);
             if (!argType.isAssignableTo(paramType))
             {
                 logError(positionalArgs.get(i).start, "Argument " + (i + 1) + ": cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
@@ -423,13 +451,12 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         {
             String argName = entry.getKey();
             NebulaParser.ExpressionContext argExpr = entry.getValue();
-            Type argType = visit(argExpr);
 
-            // We know the parameter exists from the resolution step
             Optional<ParameterSymbol> paramOpt = formalParams.stream().filter(p -> p.getName().equals(argName)).findFirst();
             if (paramOpt.isPresent())
             {
                 Type paramType = paramOpt.get().getType();
+                Type argType = visitExpecting(argExpr, paramType);
                 if (!argType.isAssignableTo(paramType))
                 {
                     logError(argExpr.start, "Named argument '" + argName + "': cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
@@ -437,7 +464,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             }
         }
 
-        // 5. Return the resolved method's return type
+        // 7. Return the resolved method's return type
         return resolvedMethod.getType();
     }
 
@@ -685,54 +712,55 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return PrimitiveType.VOID;
 	}
 
-	@Override
-	public Type visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
-	{
-		// A method must be in scope to have a return statement
-		if (currentMethod == null)
-		{
-			logError(ctx.start, "Return statement found outside of a method or constructor.");
-			return ErrorType.INSTANCE;
-		}
+    @Override
+    public Type visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
+    {
+        // A method must be in scope to have a return statement
+        if (currentMethod == null)
+        {
+            logError(ctx.start, "Return statement found outside of a method or constructor.");
+            return ErrorType.INSTANCE;
+        }
 
-		Type expectedReturnType = currentMethod.getType();
-		Type actualReturnType = PrimitiveType.VOID; // Default for 'return;'
+        Type expectedReturnType = currentMethod.getType();
+        Type actualReturnType = PrimitiveType.VOID; // Default for 'return;'
 
-		if (ctx.expression() != null)
-		{
-			actualReturnType = visit(ctx.expression());
-		}
+        if (ctx.expression() != null)
+        {
+            // Tell the nested expression we expect the function return type
+            actualReturnType = visitExpecting(ctx.expression(), expectedReturnType);
+        }
 
-		if (actualReturnType instanceof ErrorType)
-		{
-			return actualReturnType; // Propagate error
-		}
+        if (actualReturnType instanceof ErrorType)
+        {
+            return actualReturnType; // Propagate error
+        }
 
-		// Check for void method returning a value
-		if (expectedReturnType == PrimitiveType.VOID && actualReturnType != PrimitiveType.VOID)
-		{
-			logError(ctx.start, "Void method cannot return a value.");
-			return ErrorType.INSTANCE;
-		}
+        // Check for void method returning a value
+        if (expectedReturnType == PrimitiveType.VOID && actualReturnType != PrimitiveType.VOID)
+        {
+            logError(ctx.start, "Void method cannot return a value.");
+            return ErrorType.INSTANCE;
+        }
 
-		// Check for non-void method with 'return;' (implicitly returning void)
-		if (expectedReturnType != PrimitiveType.VOID && actualReturnType == PrimitiveType.VOID)
-		{
-			logError(ctx.start, "Method expects return type '" + expectedReturnType.getName() + "' but found 'return;' statement.");
-			return ErrorType.INSTANCE;
-		}
+        // Check for non-void method with 'return;' (implicitly returning void)
+        if (expectedReturnType != PrimitiveType.VOID && actualReturnType == PrimitiveType.VOID)
+        {
+            logError(ctx.start, "Method expects return type '" + expectedReturnType.getName() + "' but found 'return;' statement.");
+            return ErrorType.INSTANCE;
+        }
 
-		// Check assignability for non-void return types
-		if (expectedReturnType != PrimitiveType.VOID && !actualReturnType.isAssignableTo(expectedReturnType))
-		{
-			logError(ctx.expression().start, "Incompatible return type: cannot return '" + actualReturnType.getName() + "', expected '" + expectedReturnType.getName() + "'.");
-			return ErrorType.INSTANCE;
-		}
+        // Check assignability for non-void return types
+        if (expectedReturnType != PrimitiveType.VOID && !actualReturnType.isAssignableTo(expectedReturnType))
+        {
+            logError(ctx.expression().start, "Incompatible return type: cannot return '" + actualReturnType.getName() + "', expected '" + expectedReturnType.getName() + "'.");
+            return ErrorType.INSTANCE;
+        }
 
-		// The type of the expression is what's being returned.
-		note(ctx, actualReturnType);
-		return actualReturnType;
-	}
+        // The type of the expression is what's being returned.
+        note(ctx, actualReturnType);
+        return actualReturnType;
+    }
 
 	// --- Expressions ---
 	// NEW: Visitor for tuple literals like (1, "a") or (Name: "a", Value: 1)
@@ -1027,29 +1055,49 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return visitChildren(ctx);
 	}
 
-	@Override
-	public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
-	{
-		if (ctx.multiplicativeExpression().size() > 1)
-		{
-			Type left = visit(ctx.multiplicativeExpression(0));
-			Type right = visit(ctx.multiplicativeExpression(1));
+    @Override
+    public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
+    {
+        if (ctx.multiplicativeExpression().size() > 1)
+        {
+            // Visit left first.
+            Type left = visit(ctx.multiplicativeExpression(0));
 
-			// For simplicity, we'll require both to be numeric.
-			// A real implementation would handle string concatenation ('+').
-			if (!left.isNumeric() || !right.isNumeric())
-			{
-				logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-						"Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-				return ErrorType.INSTANCE;
-			}
-			// Simple type promotion: if either is double, result is double, etc.
-			Type resultType = Type.getWiderType(left, right);
-			note(ctx, resultType);
-			return resultType;
-		}
-		return visitChildren(ctx);
-	}
+            // Set expectation for the right operand to match left (if numeric). This helps disambiguate calls
+            // such as ".0 + getPi()" where left is a double literal so right should be resolved as double.
+            Type old = expectedType;
+            if (left != null && left.isNumeric())
+            {
+                expectedType = left;
+            }
+
+            // Visit right operand with the expectation set.
+            Type right = visit(ctx.multiplicativeExpression(1));
+            expectedType = old;
+
+            // Propagate errors
+            if (left instanceof ErrorType || right instanceof ErrorType)
+            {
+                return ErrorType.INSTANCE;
+            }
+
+            // Both sides must be numeric for arithmetic (simplified)
+            if (!left.isNumeric() || !right.isNumeric())
+            {
+                logError(
+                        ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
+                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'."
+                );
+                return ErrorType.INSTANCE;
+            }
+
+            // Simple promotion
+            Type resultType = Type.getWiderType(left, right);
+            note(ctx, resultType);
+            return resultType;
+        }
+        return visitChildren(ctx);
+    }
 
 	@Override
 	public Type visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
@@ -1073,42 +1121,42 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 
-	@Override
-	public Type visitCastExpression(NebulaParser.CastExpressionContext ctx)
-	{
-		// Resolve the target type from the grammar rule.
-		Type targetType = resolveType(ctx.type());
+    @Override
+    public Type visitCastExpression(NebulaParser.CastExpressionContext ctx)
+    {
+        // Resolve the target type from the grammar rule.
+        Type targetType = resolveType(ctx.type());
 
-		// Visit the expression being cast to find its type.
-		// NOTE: The grammar is `castExpression: '(' type ')' unaryExpression;`
-		// so we visit the unaryExpression part.
-		Type originalType = visit(ctx.unaryExpression());
+        if (targetType instanceof ErrorType)
+        {
+            note(ctx, ErrorType.INSTANCE);
+            return ErrorType.INSTANCE;
+        }
 
-		// Propagate errors
-		if (targetType instanceof ErrorType || originalType instanceof ErrorType)
-		{
-			note(ctx, ErrorType.INSTANCE);
-			return ErrorType.INSTANCE;
-		}
+        // Visit the inner expression while telling it we expect the cast target type.
+        Type originalType = visitExpecting(ctx.unaryExpression(), targetType);
 
-		// Define valid casting rules.
-		// Allow casting between any two numeric types.
-		// Also allow casting from a class type to another (for downcasting/upcasting, though without inheritance check it's very basic).
-		boolean isNumericCast = originalType.isNumeric() && targetType.isNumeric();
-		boolean isReferenceCast = originalType.isReferenceType() && targetType.isReferenceType();
+        // Propagate errors
+        if (originalType instanceof ErrorType)
+        {
+            note(ctx, ErrorType.INSTANCE);
+            return ErrorType.INSTANCE;
+        }
 
-		if (!isNumericCast && !isReferenceCast)
-		{
-			// A more advanced compiler would check for user-defined conversion operators here.
-			logError(ctx.start, "Cannot cast from '" + originalType.getName() + "' to '" + targetType.getName() + "'.");
-			note(ctx, ErrorType.INSTANCE);
-			return ErrorType.INSTANCE;
-		}
+        boolean isNumericCast = originalType.isNumeric() && targetType.isNumeric();
+        boolean isReferenceCast = originalType.isReferenceType() && targetType.isReferenceType();
 
-		// The type of the entire cast expression is the target type.
-		note(ctx, targetType);
-		return targetType;
-	}
+        if (!isNumericCast && !isReferenceCast)
+        {
+            logError(ctx.start, "Cannot cast from '" + originalType.getName() + "' to '" + targetType.getName() + "'.");
+            note(ctx, ErrorType.INSTANCE);
+            return ErrorType.INSTANCE;
+        }
+
+        // The type of the entire cast expression is the target type.
+        note(ctx, targetType);
+        return targetType;
+    }
 
 	private String getFqn(NebulaParser.QualifiedNameContext ctx)
 	{
@@ -1404,5 +1452,18 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
         // Fallback: normal overload resolution
         return owner.resolveOverload(methodName, positionalArgs, namedArgs);
+    }
+
+    /**
+     * Visit a subtree while temporarily setting an expected type (restores previous expectedType afterwards).
+     * Accepts any ParseTree so it's flexible (expression subcontexts, unaryExpression, etc).
+     */
+    private Type visitExpecting(org.antlr.v4.runtime.tree.ParseTree node, Type expected)
+    {
+        Type old = expectedType;
+        expectedType = expected;
+        Type result = visit(node); // base visitor supports visit(ParseTree)
+        expectedType = old;
+        return result;
     }
 }
