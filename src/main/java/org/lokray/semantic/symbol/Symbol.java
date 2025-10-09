@@ -8,4 +8,6 @@ public interface Symbol
 	String getName();
 
 	Type getType();
+
+	default ClassSymbol getClassSymbol(){return null;}
 }

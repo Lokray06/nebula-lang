@@ -219,10 +219,34 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		ClassSymbol oldClass = currentClass;
 		currentClass = cs;
+		Scope oldScope = currentScope;
 		currentScope = cs;
+
+		// 1. Visit all members (fields, methods, constructors, properties)
 		visitChildren(ctx);
-		currentScope = currentScope.getEnclosingScope();
+
+		// 2. FIX: Define the implicit parameterless constructor if none were found
+		// The constructor name is the class name itself.
+		if (!cs.getMethodsByName().containsKey(cs.getName()))
+		{
+			// Define the default constructor: Person() { }
+			MethodSymbol defaultCtor = new MethodSymbol(
+					cs.getName(),
+					cs.getType(),
+					new ArrayList<>(), // No parameters
+					cs,
+					false, // not static
+					true,  // public
+					true,  // isConstructor
+					false  // not native
+			);
+			cs.defineMethod(defaultCtor);
+		}
+
+		// 3. Restore scopes
+		currentScope = oldScope; // Use oldScope here
 		currentClass = oldClass;
+
 		return null;
 	}
 
@@ -253,8 +277,10 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	}
 
 	@Override
-	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx) {
-		if (currentClass == null) {
+	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
 			logError(ctx.ID().getSymbol(), "Method defined outside of a class.");
 			return null;
 		}
@@ -262,8 +288,10 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		// UPDATED: Build a list of ParameterSymbol
 		List<ParameterSymbol> params = new ArrayList<>();
-		if (ctx.parameterList() != null) {
-			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+		if (ctx.parameterList() != null)
+		{
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
+			{
 				var pCtx = ctx.parameterList().parameter(i);
 				Type paramType = resolveTypeFromCtx(pCtx.type());
 				String paramName = pCtx.ID().getText();
@@ -281,16 +309,20 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	}
 
 	@Override
-	public Void visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx) {
-		if (currentClass == null) {
+	public Void visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
 			logError(ctx.ID().getSymbol(), "Constructor defined outside of a class.");
 			return null;
 		}
 
 		// UPDATED: Build a list of ParameterSymbol
 		List<ParameterSymbol> params = new ArrayList<>();
-		if (ctx.parameterList() != null) {
-			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+		if (ctx.parameterList() != null)
+		{
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
+			{
 				var pCtx = ctx.parameterList().parameter(i);
 				Type paramType = resolveTypeFromCtx(pCtx.type());
 				String paramName = pCtx.ID().getText();
@@ -317,8 +349,10 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		// UPDATED: Build a list of ParameterSymbol
 		List<ParameterSymbol> params = new ArrayList<>();
-		if (ctx.parameterList() != null) {
-			for (int i = 0; i < ctx.parameterList().parameter().size(); i++) {
+		if (ctx.parameterList() != null)
+		{
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
+			{
 				var pCtx = ctx.parameterList().parameter(i);
 				Type paramType = resolveTypeFromCtx(pCtx.type());
 				String paramName = pCtx.ID().getText();
@@ -365,7 +399,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.ID().getSymbol(), "Field defined outside of a class.");
+			logError(ctx.ID().getSymbol(), "Property defined outside of a class.");
 			return null;
 		}
 		Type propType = resolveTypeFromCtx(ctx.type());
@@ -377,14 +411,88 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			return null;
 		}
 
-		// For simplicity, we'll model a property as a variable symbol.
-		// A more advanced implementation might use a special PropertySymbol.
 		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
 
-		VariableSymbol vs = new VariableSymbol(propName, propType, isStatic, isPublic, false);
+		// --- DETERMINE IF A SETTER EXISTS (scan accessors) ---
+		boolean hasSetter = false;
+		for (var accessorCtx : ctx.accessorDeclaration())
+		{
+			if (accessorCtx.SET_KW() != null)
+			{
+				hasSetter = true;
+				break;
+			}
+		}
+
+		// If there is no setter, the property is read-only (make it const/read-only).
+		// We create the VariableSymbol with isConst = !hasSetter
+		VariableSymbol vs = new VariableSymbol(propName, propType, isStatic, isPublic, !hasSetter);
 		currentClass.define(vs);
+
+		// --- Create accessor MethodSymbols (get_/set_) and visit their bodies ---
+		for (var accessorCtx : ctx.accessorDeclaration())
+		{
+			boolean isGetter = accessorCtx.GET_KW() != null;
+			String accessorName = isGetter ? "get_" + propName : "set_" + propName;
+
+			Type returnType = isGetter ? propType : resolveTypeFromCtx(PrimitiveType.VOID.getName());
+			List<ParameterSymbol> parameters = new ArrayList<>();
+
+			MethodSymbol ms = new MethodSymbol(
+					accessorName,
+					returnType,
+					parameters,
+					currentClass, // enclosing scope
+					isStatic,
+					isPublic,
+					false,
+					false
+			);
+			// define method on class
+			currentClass.defineMethod(ms);
+
+			// --- SCOPE SHIFT: define parameter 'value' if setter ---
+			Scope oldScope = currentScope;
+			currentScope = ms;
+			if (!isGetter)
+			{
+				// implicit 'value' param for setter
+				ParameterSymbol valueParam = new ParameterSymbol("value", propType, 0, null);
+				parameters.add(valueParam);
+				ms.define(valueParam);
+			}
+
+			// Visit the accessor's body so we process any statements inside
+			NebulaParser.AccessorBodyContext bodyCtx = accessorCtx.accessorBody();
+			if (bodyCtx.block() != null)
+			{
+				visitBlock(bodyCtx.block());
+			}
+			else if (bodyCtx.expression() != null)
+			{
+				visit(bodyCtx.expression());
+			}
+
+			// restore
+			currentScope = oldScope;
+		}
+
+		// If the property has an initializer (e.g., `= "Unnamed user";`) visit it now
+		if (ctx.expression() != null)
+		{
+			visit(ctx.expression());
+		}
+
 		return null;
+	}
+
+
+	// Helper to resolve known primitive types like "void"
+	private Type resolveTypeFromCtx(String typeName)
+	{
+		Optional<Symbol> symbol = root.resolve(typeName);
+		return symbol.map(Symbol::getType).orElse(new UnresolvedType(typeName));
 	}
 
 	// You must also implement visitors for properties, constructors, etc.

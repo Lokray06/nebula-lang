@@ -75,12 +75,21 @@ nativeConstructorDeclaration
     :   NATIVE_KW modifiers? ID L_PAREN_SYM parameterList? R_PAREN_SYM SEMI_SYM
     ;
 
+accessorBody
+    : block // Full statement block: { statement* }
+    | SEMI_SYM // Auto-implemented accessor: get;
+    | L_CURLY_SYM expression R_CURLY_SYM // The fix for your custom syntax: { expression }
+    ;
+
 propertyDeclaration
-    : modifiers? type ID L_CURLY_SYM accessorDeclaration+ R_CURLY_SYM
+    : modifiers?
+      type ID L_CURLY_SYM accessorDeclaration+ R_CURLY_SYM
+      (EQUALS_SYM expression)?
+      SEMI_SYM? // <--- FIX: Made optional to allow for block-bodied properties
     ;
 
 accessorDeclaration
-    : (GET_KW | SET_KW) (block | SEMI_SYM)
+    : (GET_KW | SET_KW) accessorBody
     ;
 
 // NEW: Native property (no getter/setter body/block)

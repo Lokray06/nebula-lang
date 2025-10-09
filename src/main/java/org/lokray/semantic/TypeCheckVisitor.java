@@ -4,6 +4,7 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
+import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.parser.NebulaParserBaseVisitor;
 import org.lokray.semantic.symbol.*;
@@ -647,6 +648,65 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 		return PrimitiveType.VOID;
+	}
+
+	@Override
+	public Type visitPropertyDeclaration(NebulaParser.PropertyDeclarationContext ctx)
+	{
+		// 1. Resolve the property symbol itself (already done in SymbolTableBuilder)
+		String propName = ctx.ID().getText();
+
+		// Check accessors to resolve method symbols created in the first pass
+		for (var accessorCtx : ctx.accessorDeclaration())
+		{
+			boolean isGetter = accessorCtx.GET_KW() != null;
+			String accessorName = isGetter ? "get_" + propName : "set_" + propName;
+
+			// Find the MethodSymbol created in SymbolTableBuilder (it is defined in currentClass)
+			Optional<MethodSymbol> msOpt = currentClass.resolveMethods(accessorName)
+					.stream()
+					.filter(ms -> ms.getParameters().size() == (isGetter ? 0 : 1))
+					.findFirst();
+
+			if (msOpt.isPresent())
+			{
+				MethodSymbol ms = msOpt.get();
+
+				// --- SCOPE SHIFT ---
+				// Set the scope for the TypeCheckVisitor
+				Scope oldScope = currentScope;
+				currentScope = ms;
+				currentMethod = ms; // Set currentMethod if you use it for 'return' checks, etc.
+
+				// 2. Visit the accessor body to perform type checking and symbol resolution
+				NebulaParser.AccessorBodyContext bodyCtx = accessorCtx.accessorBody();
+				if (bodyCtx.block() != null)
+				{
+					// Must visit the block to check statements inside the setter/getter
+					visitBlock(bodyCtx.block());
+				}
+				else if (bodyCtx.expression() != null)
+				{
+					// Must visit the expression inside the setter/getter
+					Type exprType = visit(bodyCtx.expression());
+
+					// You can add logic here: e.g., if setter, the expression must implicitly perform assignment.
+					// For now, we ensure the expression resolves.
+				}
+
+				// --- SCOPE RESTORE ---
+				currentMethod = null;
+				currentScope = oldScope;
+			}
+			else
+			{
+				// This should not happen if SymbolTableBuilder ran correctly
+				logError(accessorCtx.start, "Internal Error: Accessor symbol not found for property '" + propName + "'.");
+			}
+		}
+
+		// The property declaration itself doesn't return a type in this pass
+		return null;
 	}
 
 	@Override
@@ -1626,4 +1686,120 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		expectedType = old;
 		return result;
 	}
+
+	@Override
+	public Type visitActualAssignment(NebulaParser.ActualAssignmentContext ctx)
+	{
+		// The LHS is the first child; it can be a PostfixExpression OR a UnaryExpression that contains a PostfixExpression.
+		ParseTree lhsRoot = ctx.getChild(0);
+		Type targetType = null;
+
+		// First, try to extract a PostfixExpression if available (either directly or inside a unaryExpression).
+		NebulaParser.PostfixExpressionContext lhsPostfix = null;
+		if (lhsRoot instanceof NebulaParser.PostfixExpressionContext pf)
+		{
+			lhsPostfix = pf;
+		}
+		else if (lhsRoot instanceof NebulaParser.UnaryExpressionContext ue && ue.postfixExpression() != null)
+		{
+			lhsPostfix = ue.postfixExpression();
+		}
+
+		if (lhsPostfix != null)
+		{
+			// Check for simple member access pattern: ... . ID
+			int lastIndex = lhsPostfix.getChildCount() - 1;
+			if (lastIndex >= 2 &&
+					lhsPostfix.getChild(lastIndex - 1) instanceof TerminalNode dotNode &&
+					dotNode.getSymbol().getType() == NebulaLexer.DOT_SYM &&
+					lhsPostfix.getChild(lastIndex) instanceof TerminalNode memberIdNode &&
+					((TerminalNode) memberIdNode).getSymbol().getType() == NebulaLexer.ID)
+			{
+				// --- Member assignment (e.g. p1.name = ...) ---
+				// 1) Resolve the object's type (the thing before the dot)
+				Type targetObjectType = visit(lhsPostfix.primary());
+
+				if (targetObjectType instanceof ErrorType || targetObjectType.getClassSymbol() == null)
+				{
+					return ErrorType.INSTANCE; // error already reported
+				}
+
+				ClassSymbol owningClass = targetObjectType.getClassSymbol();
+				String memberName = memberIdNode.getText();
+
+				// 2) Resolve the member symbol inside the owning class
+				Optional<Symbol> memberOpt = owningClass.resolve(memberName);
+				if (memberOpt.isEmpty() || !(memberOpt.get() instanceof VariableSymbol memberSymbol))
+				{
+					logError(memberIdNode.getSymbol(), "Cannot find field or property '" + memberName + "' in type '" + owningClass.getName() + "'.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.A Visibility: if member is private and caller is not the owning class --> error
+				if (!memberSymbol.isPublic() && owningClass != currentClass)
+				{
+					logError(memberIdNode.getSymbol(), "Cannot access private member '" + memberName + "' from outside its class.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.B Const / immutability check
+				if (memberSymbol.isConst())
+				{
+					logError(memberIdNode.getSymbol(), "Cannot assign to constant field/property '" + memberName + "'.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.C Property setter existence & accessibility
+				String setterName = "set_" + memberName;
+				List<MethodSymbol> setterCandidates = owningClass.resolveMethods(setterName)
+						.stream()
+						.filter(ms -> ms.getParameters().size() == 1)
+						.collect(Collectors.toList());
+
+				if (setterCandidates.isEmpty())
+				{
+					logError(memberIdNode.getSymbol(), "Cannot assign to read-only property '" + memberName + "'. Setter not defined.");
+					return ErrorType.INSTANCE;
+				}
+
+				// The setter must also be accessible (public) or be callable from the same class
+				boolean setterAccessible = setterCandidates.stream().anyMatch(ms -> ms.isPublic() || owningClass == currentClass);
+				if (!setterAccessible)
+				{
+					logError(memberIdNode.getSymbol(), "Cannot assign to property '" + memberName + "': setter is not accessible from here.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 4) Link and return the member type
+				this.resolvedSymbols.put(memberIdNode, memberSymbol);
+				targetType = memberSymbol.getType();
+			}
+			else
+			{
+				// Not a direct .ID member pattern — fall back to general postfix visit.
+				targetType = visit(lhsPostfix);
+			}
+		}
+		else
+		{
+			// No postfix expression available — just visit the LHS normally.
+			targetType = visit(lhsRoot);
+		}
+
+		if (targetType instanceof ErrorType)
+		{
+			return ErrorType.INSTANCE;
+		}
+
+		// --- Final assignment type check ---
+		Type rhsType = visit(ctx.expression());
+		if (!rhsType.isAssignableTo(targetType))
+		{
+			logError(ctx.assignmentOperator().start, "Cannot assign '" + rhsType.getName() + "' to '" + targetType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+
+		return targetType;
+	}
+
 }

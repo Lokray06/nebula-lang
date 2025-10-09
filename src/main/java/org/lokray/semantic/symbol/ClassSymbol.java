@@ -44,6 +44,12 @@ public class ClassSymbol extends Scope implements Symbol
 		this.superClass = superClass;
 	}
 
+	@Override
+	public ClassSymbol getClassSymbol()
+	{
+		return this;
+	}
+
 	/**
 	 * Defines a method in the class's scope. All overloads are stored under the same name.
 	 *
