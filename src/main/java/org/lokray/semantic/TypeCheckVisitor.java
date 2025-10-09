@@ -279,58 +279,68 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return null;
 	}
 
-	@Override
-	public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-	{
-		List<Type> paramTypes = new ArrayList<>();
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				paramTypes.add(resolveType(pCtx.type()));
-			}
-		}
+    @Override
+    public Type visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+    {
+        String methodName = ctx.ID().getText();
 
-		// FIX: Use resolveMethods(name) which returns the list of overloads for that name.
-		// Then, find the specific overload that matches this declaration's signature.
-		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethods(ctx.ID().getText())
-				.stream()
-				.filter(m -> m.getParameterTypes().equals(paramTypes))
-				.findFirst();
+        // Collect parameter types from declaration
+        List<Type> paramTypes = new ArrayList<>();
+        if (ctx.parameterList() != null)
+        {
+            for (var pCtx : ctx.parameterList().parameter())
+            {
+                paramTypes.add(resolveType(pCtx.type()));
+            }
+        }
 
-		if (methodOpt.isEmpty())
-		{
-			logError(ctx.ID().getSymbol(), "Internal error: Method symbol not found during type checking pass.");
-			return null;
-		}
+        // Resolve the declared return type of this method
+        Type declaredReturnType = resolveType(ctx.type());
 
-		currentMethod = methodOpt.get();
-		currentScope = currentMethod;
+        // Find the exact matching method symbol (matches both params + return type)
+        Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope)
+                .resolveMethodBySignature(methodName, paramTypes, declaredReturnType);
 
-		if (ctx.parameterList() != null)
-		{
-			for (var pCtx : ctx.parameterList().parameter())
-			{
-				visit(pCtx);
-			}
-		}
+        if (methodOpt.isEmpty())
+        {
+            logError(ctx.ID().getSymbol(),
+                    "Internal error: Could not resolve method symbol for '" + methodName + "' with return type '"
+                            + declaredReturnType.getName() + "'.");
+            return ErrorType.INSTANCE;
+        }
 
-		// 1. Visit the method body (block) to perform type checking on its contents
-		visit(ctx.block());
+        currentMethod = methodOpt.get();
+        currentScope = currentMethod;
 
-		// 2. Check for required return statement only for non-void, non-native methods
-		if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
-		{
-			if (!blockReturns(ctx.block()))
-			{
-				logError(ctx.block().start, "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
-			}
-		}
+        // Visit parameters
+        if (ctx.parameterList() != null)
+        {
+            for (var pCtx : ctx.parameterList().parameter())
+            {
+                visit(pCtx);
+            }
+        }
 
-		currentScope = currentScope.getEnclosingScope();
-		currentMethod = null;
-		return null;
-	}
+        // Visit method body
+        if (ctx.block() != null)
+        {
+            visit(ctx.block());
+        }
+
+        // Check for missing return statement (for non-void, non-native methods)
+        if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
+        {
+            if (!blockReturns(ctx.block()))
+            {
+                logError(ctx.block().start,
+                        "Method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
+            }
+        }
+
+        currentScope = currentScope.getEnclosingScope();
+        currentMethod = null;
+        return declaredReturnType;
+    }
 
 	/**
 	 * @param callCtx     The context for error reporting
@@ -338,85 +348,101 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	 * @param methodName  Name of the method/constructor
 	 * @param argListCtx  The arguments provided
 	 * @return return
-	 */
-	private Type visitMethodCall(ParserRuleContext callCtx, ClassSymbol classSymbol, String methodName, NebulaParser.ArgumentListContext argListCtx)
-	{
-		// 1. Separate arguments into positional and named
-		List<NebulaParser.ExpressionContext> positionalArgs = new ArrayList<>();
-		Map<String, NebulaParser.ExpressionContext> namedArgs = new HashMap<>();
-		if (argListCtx != null)
-		{
-			for (ParseTree child : argListCtx.children)
-			{
-				if (child instanceof NebulaParser.ExpressionContext)
-				{
-					// This check is needed because named arguments also contain an expression
-					if (child.getParent() instanceof NebulaParser.ArgumentListContext)
-					{
-						positionalArgs.add((NebulaParser.ExpressionContext) child);
-					}
-				}
-				else if (child instanceof NebulaParser.NamedArgumentContext)
-				{
-					NebulaParser.NamedArgumentContext namedArg = (NebulaParser.NamedArgumentContext) child;
-					String name = namedArg.ID().getText();
-					if (namedArgs.containsKey(name))
-					{
-						logError(namedArg.ID().getSymbol(), "Duplicate named argument '" + name + "'.");
-						return ErrorType.INSTANCE;
-					}
-					namedArgs.put(name, namedArg.expression());
-				}
-			}
-		}
+	 *
+     * Handles method calls, supporting named/positional args and overloads by parameters and return type.
+     */
+    private Type visitMethodCall(ParserRuleContext callCtx, ClassSymbol classSymbol, String methodName, NebulaParser.ArgumentListContext argListCtx)
+    {
+        // 1. Separate arguments into positional and named
+        List<NebulaParser.ExpressionContext> positionalArgs = new ArrayList<>();
+        Map<String, NebulaParser.ExpressionContext> namedArgs = new HashMap<>();
+        if (argListCtx != null)
+        {
+            for (ParseTree child : argListCtx.children)
+            {
+                if (child instanceof NebulaParser.ExpressionContext)
+                {
+                    // This check is needed because named arguments also contain an expression
+                    if (child.getParent() instanceof NebulaParser.ArgumentListContext)
+                    {
+                        positionalArgs.add((NebulaParser.ExpressionContext) child);
+                    }
+                }
+                else if (child instanceof NebulaParser.NamedArgumentContext)
+                {
+                    NebulaParser.NamedArgumentContext namedArg = (NebulaParser.NamedArgumentContext) child;
+                    String name = namedArg.ID().getText();
+                    if (namedArgs.containsKey(name))
+                    {
+                        logError(namedArg.ID().getSymbol(), "Duplicate named argument '" + name + "'.");
+                        return ErrorType.INSTANCE;
+                    }
+                    namedArgs.put(name, namedArg.expression());
+                }
+            }
+        }
 
-		// 2. Use the new resolution logic
-		Optional<MethodSymbol> resolvedMethodOpt = classSymbol.resolveOverload(methodName, positionalArgs, namedArgs);
+        // 2. Determine expected return type from the surrounding context (if available)
+        // If your visitor tracks expectedType, use it; otherwise, default to UNKNOWN
+        Type expectedReturnType = null;
 
-		if (resolvedMethodOpt.isEmpty())
-		{
-			logError(callCtx.start, "No suitable overload for method '" + methodName + "' found for class '" + classSymbol.getName() + "'.");
-			return ErrorType.INSTANCE;
-		}
-		MethodSymbol resolvedMethod = resolvedMethodOpt.get();
-		note(callCtx, resolvedMethod); // Associate the call site with the specific method symbol
+        // 3. Try resolve by return type first, fallback to normal overloads
+        Optional<MethodSymbol> resolvedMethodOpt = resolveMethodWithReturnType(
+                classSymbol,
+                methodName,
+                positionalArgs,
+                namedArgs,
+                expectedReturnType
+        );
 
-		// 3. Type-check the provided arguments against the resolved method's parameters
-		List<ParameterSymbol> formalParams = resolvedMethod.getParameters();
+        if (resolvedMethodOpt.isEmpty())
+        {
+            logError(callCtx.start, "No suitable overload for method '" + methodName + "' found for class '" + classSymbol.getName() + "'.");
+            return ErrorType.INSTANCE;
+        }
 
-		// Check positional args
-		for (int i = 0; i < positionalArgs.size(); i++)
-		{
-			Type argType = visit(positionalArgs.get(i));
-			Type paramType = formalParams.get(i).getType();
-			if (!argType.isAssignableTo(paramType))
-			{
-				logError(positionalArgs.get(i).start, "Argument " + (i + 1) + ": cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
-			}
-		}
+        MethodSymbol resolvedMethod = resolvedMethodOpt.get();
+        note(callCtx, resolvedMethod); // Associate call site with the specific method symbol
 
-		// Check named args
-		for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
-		{
-			String argName = entry.getKey();
-			NebulaParser.ExpressionContext argExpr = entry.getValue();
-			Type argType = visit(argExpr);
+        // 4. Type-check provided arguments vs the resolved method parameters
+        List<ParameterSymbol> formalParams = resolvedMethod.getParameters();
 
-			// We know the parameter exists from the resolution step
-			Optional<ParameterSymbol> paramOpt = formalParams.stream().filter(p -> p.getName().equals(argName)).findFirst();
-			if (paramOpt.isPresent())
-			{
-				Type paramType = paramOpt.get().getType();
-				if (!argType.isAssignableTo(paramType))
-				{
-					logError(argExpr.start, "Named argument '" + argName + "': cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
-				}
-			}
-		}
-		return resolvedMethod.getType();
-	}
+        // Check positional args
+        for (int i = 0; i < positionalArgs.size(); i++)
+        {
+            Type argType = visit(positionalArgs.get(i));
+            Type paramType = formalParams.get(i).getType();
+            if (!argType.isAssignableTo(paramType))
+            {
+                logError(positionalArgs.get(i).start, "Argument " + (i + 1) + ": cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
+            }
+        }
 
-	@Override
+        // Check named args
+        for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
+        {
+            String argName = entry.getKey();
+            NebulaParser.ExpressionContext argExpr = entry.getValue();
+            Type argType = visit(argExpr);
+
+            // We know the parameter exists from the resolution step
+            Optional<ParameterSymbol> paramOpt = formalParams.stream().filter(p -> p.getName().equals(argName)).findFirst();
+            if (paramOpt.isPresent())
+            {
+                Type paramType = paramOpt.get().getType();
+                if (!argType.isAssignableTo(paramType))
+                {
+                    logError(argExpr.start, "Named argument '" + argName + "': cannot convert '" + argType.getName() + "' to '" + paramType.getName() + "'.");
+                }
+            }
+        }
+
+        // 5. Return the resolved method's return type
+        return resolvedMethod.getType();
+    }
+
+
+    @Override
 	public Type visitParameter(NebulaParser.ParameterContext ctx)
 	{
 		Type paramType = resolveType(ctx.type());
@@ -1355,4 +1381,28 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 		return statementReturns(lastStatementCtx);
 	}
+
+    /**
+     * Resolves a method, supporting overloads by both parameters and return type.
+     */
+    private Optional<MethodSymbol> resolveMethodWithReturnType(
+            ClassSymbol owner,
+            String methodName,
+            List<NebulaParser.ExpressionContext> positionalArgs,
+            Map<String, NebulaParser.ExpressionContext> namedArgs,
+            Type expectedReturnType)
+    {
+        Optional<MethodSymbol> resolved = Optional.empty();
+
+        // Try resolving based on expected return type first
+        if (expectedReturnType != null && expectedReturnType != PrimitiveType.VOID && !(expectedReturnType instanceof ErrorType))
+        {
+            resolved = owner.resolveMethodByReturnType(methodName, expectedReturnType);
+            if (resolved.isPresent())
+                return resolved;
+        }
+
+        // Fallback: normal overload resolution
+        return owner.resolveOverload(methodName, positionalArgs, namedArgs);
+    }
 }
