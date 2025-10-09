@@ -20,12 +20,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	private boolean hasErrors = false;
 	private Map<String, ClassSymbol> declaredClasses;
 
-	public SymbolTableBuilder(Scope root)
-	{
-		this.root = root;
-		this.currentScope = root;
-	}
-
 	public SymbolTableBuilder(Scope root, Map<String, ClassSymbol> declaredClasses)
 	{
 		this.root = root;
