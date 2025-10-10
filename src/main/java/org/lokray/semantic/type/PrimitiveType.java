@@ -35,7 +35,6 @@ public class PrimitiveType implements Type
 
 	public static final PrimitiveType FLOAT = new PrimitiveType("float");
 	public static final PrimitiveType DOUBLE = new PrimitiveType("double");
-	// You can add uint, byte, etc., here following the same pattern
 
 	// --- The Single Source of Truth for all keywords ---
 	private static final Map<String, PrimitiveType> KEYWORD_TO_TYPE_MAP;
@@ -213,14 +212,27 @@ public class PrimitiveType implements Type
 		return staticProperties.get(name);
 	}
 
-	private static boolean areEquivalent(Type a, Type b)
-	{
-		if (!(a instanceof PrimitiveType typeA) || !(b instanceof PrimitiveType typeB))
-		{
-			return false;
-		}
-		return getCanonicalType(typeA).equals(getCanonicalType(typeB));
-	}
+    private static boolean areEquivalent(Type a, Type b)
+    {
+        if (!(a instanceof PrimitiveType typeA) || !(b instanceof PrimitiveType typeB))
+        {
+            return false;
+        }
+
+        // Prevent uint/ubyte from being "equivalent" to signed types
+        String nameA = typeA.getName();
+        String nameB = typeB.getName();
+
+        boolean aUnsigned = nameA.startsWith("u");
+        boolean bUnsigned = nameB.startsWith("u");
+
+        if (aUnsigned != bUnsigned) {
+            // Different signedness — not equivalent
+            return false;
+        }
+
+        return getCanonicalType(typeA).equals(getCanonicalType(typeB));
+    }
 
     private static PrimitiveType getCanonicalType(PrimitiveType type)
 	{

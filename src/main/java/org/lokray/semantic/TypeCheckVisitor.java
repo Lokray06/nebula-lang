@@ -572,65 +572,46 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	// --- Statements ---
-	@Override
-	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
-	{
-		Type declaredType = resolveType(ctx.type());
-		for (var declarator : ctx.variableDeclarator())
-		{
-			String varName = declarator.ID().getText();
-			if (currentScope.resolveLocally(varName).isPresent())
-			{
-				logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
-				continue;
-			}
-			if (declarator.expression() != null)
-			{
-				Type initializerType;
-				NebulaParser.ExpressionContext initializerCtx = declarator.expression();
+    @Override
+    public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
+    {
+        // inside visitVariableDeclaration
+        Type declaredType = resolveType(ctx.type());
+        Type sharedInitializerType = null;
 
-				// Check if the initializer is an array initializer
-				if (initializerCtx.getText().startsWith("{")) // A simple but effective check
-				{
-					// This is the new, context-aware path
-					initializerType = visitArrayInitializerWithContext(
-							initializerCtx.assignmentExpression()
-									.conditionalExpression(0)
-									.logicalOrExpression()
-									.logicalAndExpression(0)
-									.bitwiseOrExpression(0)
-									.bitwiseXorExpression(0)
-									.bitwiseAndExpression(0)
-									.equalityExpression(0)
-									.relationalExpression(0)
-									.shiftExpression(0)
-									.additiveExpression(0)
-									.multiplicativeExpression(0)
-									.powerExpression(0)
-									.unaryExpression(0)
-									.postfixExpression()
-									.primary()
-									.arrayInitializer(),
-							declaredType
-					);
-				}
-				else
-				{
-					// The original path for all other expression types
-					initializerType = visit(initializerCtx);
-				}
+// Get type of last declarator’s expression (if any)
+        NebulaParser.VariableDeclaratorContext lastDecl =
+                ctx.variableDeclarator(ctx.variableDeclarator().size() - 1);
 
-				if (!initializerType.isAssignableTo(declaredType))
-				{
-					logError(declarator.expression().start, "Incompatible types: cannot assign '" + initializerType.getName() + "' to '" + declaredType.getName() + "'.");
-				}
-			}
-			VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
-			currentScope.define(varSymbol);
-			note(declarator, varSymbol);
-		}
-		return PrimitiveType.VOID;
-	}
+        if (lastDecl.expression() != null) {
+            sharedInitializerType = visit(lastDecl.expression());
+        }
+
+        for (var declarator : ctx.variableDeclarator()) {
+            String varName = declarator.ID().getText();
+
+            if (currentScope.resolveLocally(varName).isPresent()) {
+                logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
+                continue;
+            }
+
+            Type initializerType = declarator.expression() != null
+                    ? visit(declarator.expression())
+                    : (sharedInitializerType != null && declarator != lastDecl ? sharedInitializerType : null);
+
+            if (initializerType != null && !initializerType.isAssignableTo(declaredType)) {
+                logError(declarator.start,
+                        "Incompatible types: cannot assign '" + initializerType.getName()
+                                + "' to '" + declaredType.getName() + "'.");
+            }
+
+            VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
+            currentScope.define(varSymbol);
+            note(declarator, varSymbol);
+        }
+
+        return PrimitiveType.VOID;
+    }
 
 	@Override
 	public Type visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
@@ -1433,49 +1414,49 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return visitChildren(ctx);
 	}
 
-	@Override
-	public Type visitLiteral(NebulaParser.LiteralContext ctx)
-	{
-		if (ctx.INTEGER_LITERAL() != null)
-		{
-			return PrimitiveType.INT;
-		}
-		if (ctx.LONG_LITERAL() != null)
-		{
-			return PrimitiveType.LONG;
-		}
-		if (ctx.FLOAT_LITERAL() != null)
-		{
-			return PrimitiveType.FLOAT;
-		}
-		if (ctx.DOUBLE_LITERAL() != null)
-		{
-			return PrimitiveType.DOUBLE;
-		}
-		if (ctx.BOOLEAN_LITERAL() != null)
-		{
-			return PrimitiveType.BOOLEAN;
-		}
-		if (ctx.CHAR_LITERAL() != null)
-		{
-			return PrimitiveType.CHAR;
-		}
-		if (ctx.STRING_LITERAL() != null)
-		{
-			return this.globalScope.resolve("string").get().getType();
-		}
-		// NEW: Delegate to the specific visitor for interpolated strings
-		if (ctx.interpolatedString() != null)
-		{
-			return visitInterpolatedString(ctx.interpolatedString());
-		}
-		if (ctx.NULL_T() != null)
-		{
-			return NullType.INSTANCE;
-		}
+    @Override
+    public Type visitLiteral(NebulaParser.LiteralContext ctx) {
+        if (ctx.INTEGER_LITERAL() != null) {
+            return PrimitiveType.INT32; // default for plain integers
+        }
+        if (ctx.LONG_LITERAL() != null) {
+            return PrimitiveType.INT64; // long literal
+        }
+        if (ctx.HEX_LITERAL() != null) {
+            // Check if it ends with L or l
+            String text = ctx.HEX_LITERAL().getText();
+            if (text.endsWith("L") || text.endsWith("l")) {
+                return PrimitiveType.INT64;
+            }
+            return PrimitiveType.INT32;
+        }
+        if (ctx.FLOAT_LITERAL() != null) {
+            return PrimitiveType.FLOAT;
+        }
+        if (ctx.DOUBLE_LITERAL() != null) {
+            return PrimitiveType.DOUBLE;
+        }
+        if (ctx.BOOLEAN_LITERAL() != null) {
+            return PrimitiveType.BOOLEAN;
+        }
+        if (ctx.CHAR_LITERAL() != null) {
+            return PrimitiveType.CHAR;
+        }
+        if (ctx.STRING_LITERAL() != null)
+        {
+            return this.globalScope.resolve("string").get().getType();
+        }
+        if (ctx.interpolatedString() != null)
+        {
+            return visitInterpolatedString(ctx.interpolatedString());
+        }
+        if (ctx.NULL_T() != null) {
+            return NullType.INSTANCE;
+        }
 
-		return ErrorType.INSTANCE;
-	}
+        // Defensive fallback
+        return ErrorType.INSTANCE;
+    }
 
 	/**
 	 * Visits an array initializer with the context of the type it's being assigned to.
