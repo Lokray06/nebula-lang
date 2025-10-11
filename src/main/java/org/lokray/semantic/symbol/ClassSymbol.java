@@ -202,7 +202,7 @@ public class ClassSymbol extends Scope implements Symbol
 	}
 
 	@Override
-	public ClassType getType()
+	public Type getType()
 	{
 		return type;
 	}

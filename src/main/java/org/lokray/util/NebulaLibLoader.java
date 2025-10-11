@@ -71,9 +71,7 @@ public class NebulaLibLoader
 				boolean isConstructor = md.name.equals(cd.name);
 				boolean isNative = md.isNative;
 
-				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType,
-						params,
-						cs, md.isStatic, true, isConstructor, isNative);
+				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? cs.getType() : returnType, params, cs, md.isStatic, md.isPublic, isConstructor, isNative);
 
 				// IMPORTANT: Define the parameters in the method's scope
 				for (ParameterSymbol ps : params)
@@ -86,8 +84,57 @@ public class NebulaLibLoader
 			for (FieldDTO fd : cd.fields)
 			{
 				Type fieldType = resolveTypeFromString(fd.type, globalScope);
-				VariableSymbol vs = new VariableSymbol(fd.name, fieldType, fd.isStatic, true, true);
+				VariableSymbol vs = new VariableSymbol(fd.name, fieldType, fd.isStatic, fd.isPublic, fd.isConst, fd.isNative);
+				Debug.logDebug("Defined class member " + cd.name + "." + fd.name);
 				cs.define(vs);
+			}
+		}
+		for (StructDTO sd : dto.structs)
+		{
+			StructSymbol ss = new StructSymbol(sd.name, parent, sd.isNative, sd.isPublic);
+			parent.define(ss);
+
+			String structFqn = parentFqn.isEmpty() ? sd.name : parentFqn + "." + sd.name;
+			declaredClasses.put(structFqn, ss); // Add to the global map
+
+			for (MethodDTO md : sd.methods)
+			{
+				Type returnType = resolveTypeFromString(md.returnType, globalScope);
+
+				// Use the new ParameterDTO list
+				List<ParameterSymbol> params = new ArrayList<>();
+				for (int i = 0; i < md.parameters.size(); i++)
+				{
+					ParameterDTO pd = md.parameters.get(i);
+					Type paramType = resolveTypeFromString(pd.type, globalScope);
+
+					// We now use the name from the DTO, not a dummy name
+					String paramName = pd.name;
+
+					// No ExpressionContext available for default value (pass null)
+					ParameterSymbol ps = new ParameterSymbol(paramName, paramType, i, null);
+					params.add(ps);
+				}
+
+				boolean isConstructor = md.name.equals(sd.name);
+				boolean isNative = md.isNative;
+
+				MethodSymbol ms = new MethodSymbol(md.name, isConstructor ? ss.getType() : returnType, params, ss, md.isStatic, md.isPublic, isConstructor, isNative);
+
+				// IMPORTANT: Define the parameters in the method's scope
+				for (ParameterSymbol ps : params)
+				{
+					ms.define(ps);
+				}
+
+				ss.defineMethod(ms);
+			}
+			for (FieldDTO fd : sd.fields)
+			{
+				Type fieldType = resolveTypeFromString(fd.type, globalScope);
+				VariableSymbol vs = new VariableSymbol(fd.name, fieldType, fd.isStatic, fd.isPublic, fd.isConst, fd.isNative);
+				Debug.logDebug("Defined struct member " + sd.name + "." + fd.name);
+				ss.define(vs);
 			}
 		}
 		for (NamespaceDTO c : dto.namespaces)

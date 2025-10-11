@@ -241,6 +241,42 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	@Override
+	public Type visitStructDeclaration(NebulaParser.StructDeclarationContext ctx)
+	{
+		String structName = ctx.ID().getText();
+		// Resolve the ClassSymbol created in the first pass (SymbolTableBuilder)
+		ClassSymbol structSymbol = (ClassSymbol) currentScope.resolveLocally(structName).orElse(null);
+		if (structSymbol == null)
+		{
+			// This would be an internal error if SymbolTableBuilder ran correctly
+			logError(ctx.start, "Internal error: Struct symbol '" + structName + "' not found.");
+			return null;
+		}
+
+		// --- SCOPE SHIFT ---
+		// Backup and set the current context before visiting members
+		ClassSymbol oldClass = currentClass;
+		currentClass = structSymbol;
+		Scope oldScope = currentScope;
+		currentScope = structSymbol; // <-- This is the crucial step
+
+		// Visit the members inside the struct body
+		if (ctx.structBody() != null)
+		{
+			for (var member : ctx.structBody())
+			{
+				visit(member); // Now, when visitConstructorDeclaration is called, currentScope IS a ClassSymbol
+			}
+		}
+
+		// --- SCOPE RESTORE ---
+		// Restore the context after leaving the struct
+		currentScope = oldScope;
+		currentClass = oldClass;
+		return null;
+	}
+
+	@Override
 	public Type visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
 	{
 		List<Type> paramTypes = new ArrayList<>();
@@ -572,46 +608,50 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	// --- Statements ---
-    @Override
-    public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
-    {
-        // inside visitVariableDeclaration
-        Type declaredType = resolveType(ctx.type());
-        Type sharedInitializerType = null;
+	@Override
+	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
+	{
+		// inside visitVariableDeclaration
+		Type declaredType = resolveType(ctx.type());
+		Type sharedInitializerType = null;
 
 // Get type of last declarator’s expression (if any)
-        NebulaParser.VariableDeclaratorContext lastDecl =
-                ctx.variableDeclarator(ctx.variableDeclarator().size() - 1);
+		NebulaParser.VariableDeclaratorContext lastDecl =
+				ctx.variableDeclarator(ctx.variableDeclarator().size() - 1);
 
-        if (lastDecl.expression() != null) {
-            sharedInitializerType = visit(lastDecl.expression());
-        }
+		if (lastDecl.expression() != null)
+		{
+			sharedInitializerType = visit(lastDecl.expression());
+		}
 
-        for (var declarator : ctx.variableDeclarator()) {
-            String varName = declarator.ID().getText();
+		for (var declarator : ctx.variableDeclarator())
+		{
+			String varName = declarator.ID().getText();
 
-            if (currentScope.resolveLocally(varName).isPresent()) {
-                logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
-                continue;
-            }
+			if (currentScope.resolveLocally(varName).isPresent())
+			{
+				logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
+				continue;
+			}
 
-            Type initializerType = declarator.expression() != null
-                    ? visit(declarator.expression())
-                    : (sharedInitializerType != null && declarator != lastDecl ? sharedInitializerType : null);
+			Type initializerType = declarator.expression() != null
+					? visit(declarator.expression())
+					: (sharedInitializerType != null && declarator != lastDecl ? sharedInitializerType : null);
 
-            if (initializerType != null && !initializerType.isAssignableTo(declaredType)) {
-                logError(declarator.start,
-                        "Incompatible types: cannot assign '" + initializerType.getName()
-                                + "' to '" + declaredType.getName() + "'.");
-            }
+			if (initializerType != null && !initializerType.isAssignableTo(declaredType))
+			{
+				logError(declarator.start,
+						"Incompatible types: cannot assign '" + initializerType.getName()
+								+ "' to '" + declaredType.getName() + "'.");
+			}
 
-            VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
-            currentScope.define(varSymbol);
-            note(declarator, varSymbol);
-        }
+			VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
+			currentScope.define(varSymbol);
+			note(declarator, varSymbol);
+		}
 
-        return PrimitiveType.VOID;
-    }
+		return PrimitiveType.VOID;
+	}
 
 	@Override
 	public Type visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
@@ -1012,6 +1052,41 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		Type currentType = visit(ctx.primary());
 		Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
 
+		// --- Bare type-name check (fixed logic) ---
+		boolean primaryIsTypeName = false;
+
+		// Case 1: grammar-level primitive type literal (e.g. "int", "uint")
+		if (ctx.primary() != null && ctx.primary().primitiveType() != null)
+		{
+			primaryIsTypeName = true;
+		}
+		// Case 2: resolved symbol is itself a type (class/struct/namespace)
+		else if (currentSymbol != null)
+		{
+			if (currentSymbol instanceof ClassSymbol ||
+					currentSymbol instanceof StructSymbol ||
+					currentSymbol instanceof NamespaceSymbol)
+			{
+				primaryIsTypeName = true;
+			}
+			else if (currentSymbol instanceof AliasSymbol)
+			{
+				Symbol target = ((AliasSymbol) currentSymbol).getTargetSymbol();
+				if (target instanceof ClassSymbol || target instanceof StructSymbol || target instanceof NamespaceSymbol)
+				{
+					primaryIsTypeName = true;
+				}
+			}
+		}
+
+		// If it’s just a bare type-name with no postfixes, that’s an error
+		if (primaryIsTypeName && ctx.getChildCount() == 1)
+		{
+			logError(ctx.start, "Expected an expression that evaluates to a value, but found a bare type name '" + currentType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+
+		// --- Process postfix operations (.member, (), etc.) ---
 		int i = 1;
 		while (i < ctx.getChildCount())
 		{
@@ -1024,25 +1099,19 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 			if (operator.getText().equals("."))
 			{
-				i++; // Move to the member ID
+				i++; // Move to member identifier
 				if (i >= ctx.getChildCount())
-				{
-					break; // Should not happen with valid grammar
-				}
-				String memberName = ctx.getChild(i).getText();
-				Scope scopeToSearch = null;
+					break;
 
-				if (currentType instanceof ClassType)
+				String memberName = ctx.getChild(i).getText();
+				Scope scopeToSearch = currentType.getClassSymbol(); // Works for ClassType, StructType, PrimitiveType
+
+				if (scopeToSearch == null)
 				{
-					scopeToSearch = ((ClassType) currentType).getClassSymbol();
-				}
-				else if (currentType instanceof NamespaceType)
-				{
-					scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
-				}
-				else if (currentType instanceof TupleType)
-				{
-					scopeToSearch = (TupleType) currentType;
+					if (currentType instanceof NamespaceType)
+						scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
+					else if (currentType instanceof TupleType)
+						scopeToSearch = (TupleType) currentType;
 				}
 
 				if (scopeToSearch == null)
@@ -1060,22 +1129,19 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 				currentSymbol = memberOpt.get();
 				if (currentSymbol instanceof AliasSymbol)
-				{
 					currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
-				}
-				currentType = currentSymbol.getType();
 
+				currentType = currentSymbol.getType();
 			}
 			else if (operator.getText().equals("("))
 			{
-				// This is a method call!
+				// Method call
 				if (!(currentSymbol instanceof MethodSymbol))
 				{
 					logError(ctx.start, "'" + currentSymbol.getName() + "' is not a method and cannot be called.");
 					return ErrorType.INSTANCE;
 				}
 
-				// FIX: Cast to Scope to access getEnclosingScope()
 				Scope enclosingScope = ((Scope) currentSymbol).getEnclosingScope();
 				if (!(enclosingScope instanceof ClassSymbol))
 				{
@@ -1095,18 +1161,16 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				}
 
 				currentType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
-				currentSymbol = null; // Result of a method call is a value, not a named symbol
+				currentSymbol = null; // Result of a call is a value, not a symbol
+			}
 
-			} // Add other postfix operators like ++, --, [] here
-
-			i++; // Move to the next operator
+			i++; // Move to next operator
 		}
 
 		note(ctx, currentType);
 		if (currentSymbol != null)
-		{
 			note(ctx, currentSymbol);
-		}
+
 		return currentType;
 	}
 
@@ -1414,93 +1478,58 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return visitChildren(ctx);
 	}
 
-    @Override
-    public Type visitLiteral(NebulaParser.LiteralContext ctx) {
-        if (ctx.INTEGER_LITERAL() != null) {
-            return PrimitiveType.INT32; // default for plain integers
-        }
-        if (ctx.LONG_LITERAL() != null) {
-            return PrimitiveType.INT64; // long literal
-        }
-        if (ctx.HEX_LITERAL() != null) {
-            // Check if it ends with L or l
-            String text = ctx.HEX_LITERAL().getText();
-            if (text.endsWith("L") || text.endsWith("l")) {
-                return PrimitiveType.INT64;
-            }
-            return PrimitiveType.INT32;
-        }
-        if (ctx.FLOAT_LITERAL() != null) {
-            return PrimitiveType.FLOAT;
-        }
-        if (ctx.DOUBLE_LITERAL() != null) {
-            return PrimitiveType.DOUBLE;
-        }
-        if (ctx.BOOLEAN_LITERAL() != null) {
-            return PrimitiveType.BOOLEAN;
-        }
-        if (ctx.CHAR_LITERAL() != null) {
-            return PrimitiveType.CHAR;
-        }
-        if (ctx.STRING_LITERAL() != null)
-        {
-            return this.globalScope.resolve("string").get().getType();
-        }
-        if (ctx.interpolatedString() != null)
-        {
-            return visitInterpolatedString(ctx.interpolatedString());
-        }
-        if (ctx.NULL_T() != null) {
-            return NullType.INSTANCE;
-        }
-
-        // Defensive fallback
-        return ErrorType.INSTANCE;
-    }
-
-	/**
-	 * Visits an array initializer with the context of the type it's being assigned to.
-	 *
-	 * @param ctx          The ArrayInitializerContext from the parse tree.
-	 * @param expectedType The type of the variable being declared (e.g., int[]).
-	 * @return The expectedType if all elements are assignable, otherwise ErrorType.
-	 */
-	private Type visitArrayInitializerWithContext(NebulaParser.ArrayInitializerContext ctx, Type expectedType)
+	@Override
+	public Type visitLiteral(NebulaParser.LiteralContext ctx)
 	{
-		// 1. Ensure the target type is actually an array
-		if (!expectedType.isArray())
+		if (ctx.INTEGER_LITERAL() != null)
 		{
-			logError(ctx.start, "Array initializer can only be used to initialize an array.");
-			return ErrorType.INSTANCE;
+			return PrimitiveType.INT32; // default for plain integers
+		}
+		if (ctx.LONG_LITERAL() != null)
+		{
+			return PrimitiveType.INT64; // long literal
+		}
+		if (ctx.HEX_LITERAL() != null)
+		{
+			// Check if it ends with L or l
+			String text = ctx.HEX_LITERAL().getText();
+			if (text.endsWith("L") || text.endsWith("l"))
+			{
+				return PrimitiveType.INT64;
+			}
+			return PrimitiveType.INT32;
+		}
+		if (ctx.FLOAT_LITERAL() != null)
+		{
+			return PrimitiveType.FLOAT;
+		}
+		if (ctx.DOUBLE_LITERAL() != null)
+		{
+			return PrimitiveType.DOUBLE;
+		}
+		if (ctx.BOOLEAN_LITERAL() != null)
+		{
+			return PrimitiveType.BOOLEAN;
+		}
+		if (ctx.CHAR_LITERAL() != null)
+		{
+			return PrimitiveType.CHAR;
+		}
+		if (ctx.STRING_LITERAL() != null)
+		{
+			return this.globalScope.resolve("string").get().getType();
+		}
+		if (ctx.interpolatedString() != null)
+		{
+			return visitInterpolatedString(ctx.interpolatedString());
+		}
+		if (ctx.NULL_T() != null)
+		{
+			return NullType.INSTANCE;
 		}
 
-		Type expectedElementType = ((ArrayType) expectedType).getElementType();
-
-		// 2. Visit each element in the initializer
-		for (NebulaParser.ArrayElementContext elementCtx : ctx.arrayElement())
-		{
-			// An element can be another expression or a nested array initializer
-			if (elementCtx.expression() != null)
-			{
-				Type actualElementType = visit(elementCtx.expression());
-
-				// 3. Check if the element's type can be assigned to the array's element type
-				if (!actualElementType.isAssignableTo(expectedElementType))
-				{
-					logError(elementCtx.expression().start, "Incompatible types in array initializer: cannot convert '" + actualElementType.getName() + "' to '" + expectedElementType.getName() + "'.");
-					// We can return early, or continue to find all errors in the initializer
-				}
-			}
-			else if (elementCtx.arrayInitializer() != null)
-			{
-				// Handle nested initializers for multi-dimensional arrays, e.g., int[][] x = {{1}, {2}};
-				visitArrayInitializerWithContext(elementCtx.arrayInitializer(), expectedElementType);
-			}
-		}
-
-		// 4. If all checks pass, the type of the initializer is the expected array type
-		note(ctx, expectedType);
-		return expectedType;
+		// Defensive fallback
+		return ErrorType.INSTANCE;
 	}
 
 	/**

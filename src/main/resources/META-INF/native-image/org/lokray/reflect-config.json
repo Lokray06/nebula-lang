@@ -18,6 +18,12 @@
     "allDeclaredMethods": true
   },
   {
+    "name": "org.lokray.ndk.dto.StructDTO",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
     "name": "org.lokray.ndk.dto.MethodDTO",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,

@@ -1,6 +1,7 @@
 // File: src/main/java/org/lokray/semantic/type/Type.java
 package org.lokray.semantic.type;
 
+import org.lokray.semantic.symbol.ClassSymbol;
 import org.lokray.semantic.symbol.Symbol;
 
 public interface Type extends Symbol
@@ -20,7 +21,7 @@ public interface Type extends Symbol
 		return false;
 	}
 
-    default boolean isBoolean()
+	default boolean isBoolean()
 	{
 		return false;
 	}
@@ -40,5 +41,19 @@ public interface Type extends Symbol
 		return false;
 	}
 
-    static Type getWiderType(Type a, Type b) { return PrimitiveType.getWiderType(a, b); }
+	default boolean isStruct()
+	{
+		return false;
+	}
+
+	static Type getWiderType(Type a, Type b)
+	{
+		return PrimitiveType.getWiderType(a, b);
+	}
+
+	@Override
+	default ClassSymbol getClassSymbol()
+	{
+		return null;
+	}
 }

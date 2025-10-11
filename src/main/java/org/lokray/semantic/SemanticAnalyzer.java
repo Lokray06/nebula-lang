@@ -33,6 +33,7 @@ public class SemanticAnalyzer
 				NebulaLibLoader.loadLibrary(ndkLib, globalScope, declaredClasses);
 				// After loading, ensure all NDK types are properly linked
 				linkNdkSymbols();
+				linkIntrinsicsToNdkStructs();
 
 				// After NDK load, create a global alias for 'string' -> 'nebula.core.String'
 				if (declaredClasses.containsKey("nebula.core.String"))
@@ -45,7 +46,7 @@ public class SemanticAnalyzer
 			catch (Exception e)
 			{
 				Debug.logWarning("Failed to load ndk library: " + e.getMessage());
-				//e.printStackTrace(); // Uncomment for debugging
+				e.printStackTrace(); // Uncomment for debugging
 			}
 		}
 	}
@@ -149,6 +150,59 @@ public class SemanticAnalyzer
 			}
 		}
 		return new UnresolvedType(name);
+	}
+
+	private void linkIntrinsicsToNdkStructs()
+	{
+		Debug.logDebug("Linking intrinsic types to NDK structs...");
+
+		// Map compiler-known names to the canonical NDK struct name.
+		Map<String, String> intrinsicToCanonical = Map.ofEntries(
+				Map.entry("bool", "Bool"),
+				Map.entry("char", "Char"),
+
+				// Integers
+				Map.entry("byte", "Int8"),
+				Map.entry("short", "Int16"),
+				Map.entry("int", "Int32"),
+				Map.entry("long", "Int64"),
+				Map.entry("int8", "Int8"),
+				Map.entry("int16", "Int16"),
+				Map.entry("int32", "Int32"),
+				Map.entry("int64", "Int64"),
+
+				//Unsigned integers
+				Map.entry("ubyte", "UInt8"),
+				Map.entry("ushort", "UInt16"),
+				Map.entry("uint", "UInt32"),
+				Map.entry("ulong", "UInt64"),
+				Map.entry("uint8", "UInt8"),
+				Map.entry("uint16", "UInt16"),
+				Map.entry("uint32", "UInt32"),
+				Map.entry("uint64", "UInt64"),
+
+				Map.entry("float", "Float"),
+				Map.entry("double", "Double")
+
+		);
+
+		for (PrimitiveType pType : BuiltInTypeLoader.getAllPrimitives())
+		{
+			String canonicalName = intrinsicToCanonical.get(pType.getName());
+			if (canonicalName == null)
+			{
+				continue; // Skip types like 'void'
+			}
+
+			String fqn = "nebula.core." + canonicalName;
+
+			Symbol symbol = declaredClasses.get(fqn);
+			if (symbol instanceof StructSymbol)
+			{
+				pType.setBackingStruct((StructSymbol) symbol);
+				Debug.logDebug("  Linked " + pType.getName() + " -> " + fqn);
+			}
+		}
 	}
 
 	public Optional<Symbol> getResolvedSymbol(ParseTree node)

@@ -6,6 +6,10 @@ import org.lokray.semantic.symbol.TypeSymbol;
 import org.lokray.semantic.type.NullType;
 import org.lokray.semantic.type.PrimitiveType;
 
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.stream.Collectors;
+
 /**
  * Utility class responsible for defining all built-in primitive types
  * into the Global Scope of the Symbol Table.
@@ -28,5 +32,11 @@ public class BuiltInTypeLoader
 
 		// Define 'null' as a special TypeSymbol that holds the NullType
 		scope.define(new TypeSymbol("null", NullType.INSTANCE));
+	}
+
+	public static Collection<PrimitiveType> getAllPrimitives()
+	{
+		// Return a collection of unique PrimitiveType instances
+		return new HashSet<>(PrimitiveType.getAllPrimitiveKeywords().values());
 	}
 }

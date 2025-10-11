@@ -1,8 +1,11 @@
 // File: src/main/java/org/lokray/semantic/type/PrimitiveType.java
 package org.lokray.semantic.type;
 
+import org.lokray.semantic.symbol.ClassSymbol;
+import org.lokray.semantic.symbol.StructSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
+import org.lokray.util.Debug;
 
 import static org.lokray.parser.NebulaLexer.*;
 
@@ -39,6 +42,7 @@ public class PrimitiveType implements Type
 	// --- The Single Source of Truth for all keywords ---
 	private static final Map<String, PrimitiveType> KEYWORD_TO_TYPE_MAP;
 	private static final Map<PrimitiveType, Set<PrimitiveType>> WIDENING_MAP = new HashMap<>();
+	private StructSymbol backingStruct = null;
 
 
 	// Static initializer block to populate the map once
@@ -136,6 +140,22 @@ public class PrimitiveType implements Type
 		initializeStaticProperties();
 	}
 
+	public void setBackingStruct(StructSymbol symbol)
+	{
+		this.backingStruct = symbol;
+	}
+
+	public StructSymbol getBackingStruct()
+	{
+		return this.backingStruct;
+	}
+
+	@Override
+	public ClassSymbol getClassSymbol()
+	{
+		return this.backingStruct;
+	}
+
 	@Override
 	public String getName()
 	{
@@ -202,39 +222,41 @@ public class PrimitiveType implements Type
 		}
 	}
 
-    @Override
-    public boolean isBoolean() {
-        return this.equals(BOOLEAN);
-    }
+	@Override
+	public boolean isBoolean()
+	{
+		return this.equals(BOOLEAN);
+	}
 
-    public Symbol resolveStaticProperty(String name)
+	public Symbol resolveStaticProperty(String name)
 	{
 		return staticProperties.get(name);
 	}
 
-    private static boolean areEquivalent(Type a, Type b)
-    {
-        if (!(a instanceof PrimitiveType typeA) || !(b instanceof PrimitiveType typeB))
-        {
-            return false;
-        }
+	private static boolean areEquivalent(Type a, Type b)
+	{
+		if (!(a instanceof PrimitiveType typeA) || !(b instanceof PrimitiveType typeB))
+		{
+			return false;
+		}
 
-        // Prevent uint/ubyte from being "equivalent" to signed types
-        String nameA = typeA.getName();
-        String nameB = typeB.getName();
+		// Prevent uint/ubyte from being "equivalent" to signed types
+		String nameA = typeA.getName();
+		String nameB = typeB.getName();
 
-        boolean aUnsigned = nameA.startsWith("u");
-        boolean bUnsigned = nameB.startsWith("u");
+		boolean aUnsigned = nameA.startsWith("u");
+		boolean bUnsigned = nameB.startsWith("u");
 
-        if (aUnsigned != bUnsigned) {
-            // Different signedness — not equivalent
-            return false;
-        }
+		if (aUnsigned != bUnsigned)
+		{
+			// Different signedness — not equivalent
+			return false;
+		}
 
-        return getCanonicalType(typeA).equals(getCanonicalType(typeB));
-    }
+		return getCanonicalType(typeA).equals(getCanonicalType(typeB));
+	}
 
-    private static PrimitiveType getCanonicalType(PrimitiveType type)
+	private static PrimitiveType getCanonicalType(PrimitiveType type)
 	{
 		if (type.equals(INT8) || type.equals(BYTE_SPE_T))
 		{
@@ -271,38 +293,53 @@ public class PrimitiveType implements Type
 		return type;
 	}
 
-    public static Type getWiderType(Type a, Type b)
-    {
-        // If both are exactly the same type, return it
-        if (a.equals(b)) return a;
+	public static Type getWiderType(Type a, Type b)
+	{
+		// If both are exactly the same type, return it
+		if (a.equals(b))
+		{
+			return a;
+		}
 
-        // Only handle primitive types for now
-        if (!(a instanceof PrimitiveType pa) || !(b instanceof PrimitiveType pb))
-        {
-            // For non-primitives, no widening — just return an error or one of them
-            return a.isAssignableTo(b) ? b : (b.isAssignableTo(a) ? a : ErrorType.INSTANCE);
-        }
+		// Only handle primitive types for now
+		if (!(a instanceof PrimitiveType pa) || !(b instanceof PrimitiveType pb))
+		{
+			// For non-primitives, no widening — just return an error or one of them
+			return a.isAssignableTo(b) ? b : (b.isAssignableTo(a) ? a : ErrorType.INSTANCE);
+		}
 
-        // If one can be assigned to the other, the wider type is the one it can be assigned to.
-        if (pa.isAssignableTo(pb))
-        {
-            return pb;
-        }
-        if (pb.isAssignableTo(pa))
-        {
-            return pa;
-        }
+		// If one can be assigned to the other, the wider type is the one it can be assigned to.
+		if (pa.isAssignableTo(pb))
+		{
+			return pb;
+		}
+		if (pb.isAssignableTo(pa))
+		{
+			return pa;
+		}
 
-        // If neither can widen to the other, choose a fallback — for numeric types, prefer float/double
-        if (pa.isNumeric() && pb.isNumeric())
-        {
-            if (pa.equals(DOUBLE) || pb.equals(DOUBLE)) return DOUBLE;
-            if (pa.equals(FLOAT) || pb.equals(FLOAT)) return FLOAT;
-            if (pa.equals(LONG) || pb.equals(LONG)) return LONG;
-            if (pa.equals(INT) || pb.equals(INT)) return INT;
-        }
+		// If neither can widen to the other, choose a fallback — for numeric types, prefer float/double
+		if (pa.isNumeric() && pb.isNumeric())
+		{
+			if (pa.equals(DOUBLE) || pb.equals(DOUBLE))
+			{
+				return DOUBLE;
+			}
+			if (pa.equals(FLOAT) || pb.equals(FLOAT))
+			{
+				return FLOAT;
+			}
+			if (pa.equals(LONG) || pb.equals(LONG))
+			{
+				return LONG;
+			}
+			if (pa.equals(INT) || pb.equals(INT))
+			{
+				return INT;
+			}
+		}
 
-        // Otherwise, incompatible types
-        return ErrorType.INSTANCE;
-    }
+		// Otherwise, incompatible types
+		return ErrorType.INSTANCE;
+	}
 }

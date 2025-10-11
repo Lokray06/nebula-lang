@@ -162,6 +162,17 @@ public class NdkCompiler
 				}
 			}
 		}
+		for (var strc : ns.structs)
+		{
+			if (strc.isNative)
+			{
+				for (var m : strc.methods)
+				{
+					String fnName = String.format("nebula_%s_%s_%s", qualified, strc.name, m.name);
+					sb.append("void ").append(fnName).append("() { printf(\"[nebula runtime stub] ").append(fnName).append("\\n\"); }\n");
+				}
+			}
+		}
 		for (var child : ns.namespaces)
 		{
 			emitNamespaceStubs(child, qualified, sb);

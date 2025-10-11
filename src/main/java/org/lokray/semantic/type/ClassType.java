@@ -49,16 +49,26 @@ public class ClassType implements Type
 	@Override
 	public boolean equals(Object obj)
 	{
-        if (this == obj)
-        {
-            return true;
-        }
-        if (obj == null || getClass() != obj.getClass())
-        {
-            return false;
-        }
+		if (this == obj)
+		{
+			return true;
+		}
+		if (obj == null || getClass() != obj.getClass())
+		{
+			return false;
+		}
 		ClassType classType = (ClassType) obj;
 		return classSymbol.equals(classType.classSymbol);
+	}
+
+	/**
+	 * Identifies if this symbol represents a struct.
+	 *
+	 * @return false for a regular class.
+	 */
+	public boolean isStruct()
+	{
+		return false;
 	}
 
 	@Override

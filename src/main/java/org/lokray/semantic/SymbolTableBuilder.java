@@ -215,6 +215,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
 		declaredClasses.put(fqn, cs);
 
+		Debug.logDebug("Defined class " + cs.getName());
 		currentScope.define(cs);
 
 		ClassSymbol oldClass = currentClass;
@@ -265,6 +266,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		ClassSymbol cs = new ClassSymbol(ctx.ID().getText(), currentScope, true, isPublic);
 		declaredClasses.put(fqn, cs);
 
+		Debug.logDebug("Defined native class " + cs.getName());
 		currentScope.define(cs);
 
 		ClassSymbol oldClass = currentClass;
@@ -273,6 +275,95 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		visitChildren(ctx);
 		currentScope = currentScope.getEnclosingScope();
 		currentClass = oldClass;
+		return null;
+	}
+
+	@Override
+	public Void visitStructDeclaration(NebulaParser.StructDeclarationContext ctx)
+	{
+		String structName = ctx.ID().getText();
+		if (currentScope.resolveLocally(structName).isPresent())
+		{
+			logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.");
+			return null;
+		}
+
+		boolean isPublic = ctx.modifiers() == null || ctx.modifiers().getText().contains("public");
+
+		// --- MODIFIED PART ---
+		// Create a StructSymbol for the struct.
+		StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, false);
+		// --- END MODIFIED PART ---
+
+		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+		String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
+		declaredClasses.put(fqn, structSymbol); // It's a ClassSymbol subclass, so this map still works
+
+		Debug.logDebug("Defined struct " + structSymbol.getName());
+		currentScope.define(structSymbol);
+
+		ClassSymbol oldClass = currentClass;
+		currentClass = structSymbol;
+		Scope oldScope = currentScope;
+		currentScope = structSymbol;
+
+		visitChildren(ctx);
+
+		if (!structSymbol.getMethodsByName().containsKey(structSymbol.getName()))
+		{
+			MethodSymbol defaultCtor = new MethodSymbol(
+					structSymbol.getName(),
+					structSymbol.getType(), // This will now correctly be a StructType
+					new ArrayList<>(),
+					structSymbol,
+					false, // not static
+					true,  // public
+					true,  // isConstructor
+					false  // not native
+			);
+			structSymbol.defineMethod(defaultCtor);
+		}
+
+		currentScope = oldScope;
+		currentClass = oldClass;
+
+		return null;
+	}
+
+	@Override
+	public Void visitNativeStructDeclaration(NebulaParser.NativeStructDeclarationContext ctx)
+	{
+		String structName = ctx.ID().getText();
+		if (currentScope.resolveLocally(structName).isPresent())
+		{
+			logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.");
+			return null;
+		}
+
+		boolean isPublic = ctx.modifiers() != null && ctx.modifiers().getText().contains("public");
+
+		// Use the new constructor to create a native StructSymbol
+		StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, true);
+
+		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+		String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
+		declaredClasses.put(fqn, structSymbol);
+
+		Debug.logDebug("Defined native struct " + structSymbol.getName());
+		currentScope.define(structSymbol);
+
+		// --- SCOPE SHIFT ---
+		ClassSymbol oldClass = currentClass;
+		currentClass = structSymbol;
+		Scope oldScope = currentScope;
+		currentScope = structSymbol;
+
+		visitChildren(ctx);
+
+		// --- SCOPE RESTORE ---
+		currentScope = oldScope;
+		currentClass = oldClass;
+
 		return null;
 	}
 
@@ -393,6 +484,77 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		}
 		return null;
 	}
+
+	/**
+	 * Visits a native field declaration context.
+	 * Native fields are typically external members mapped to the underlying platform
+	 * and must be declared static.
+	 *
+	 * @param ctx The context for the native field declaration.
+	 * @return null (as the visitor returns Void).
+	 */
+	@Override
+	public Void visitNativeFieldDeclaration(NebulaParser.NativeFieldDeclarationContext ctx)
+	{
+		// 1. Check if the declaration is inside a class
+		if (!(currentScope instanceof ClassSymbol))
+		{
+			logError(ctx.start, "Native fields must be declared inside a class scope.");
+			return null;
+		}
+
+		// Use 'enclosingClass' to avoid shadowing the field 'this.currentClass'
+		ClassSymbol enclosingClass = (ClassSymbol) currentScope;
+
+		// 2. Resolve the Type
+		// NOTE: Using the context object directly, similar to visitFieldDeclaration.
+		Type fieldType = resolveTypeFromCtx(ctx.type());
+
+		if (fieldType == null)
+		{
+			logError(ctx.type().start, "Cannot resolve type '" + ctx.type().getText() + "' for native field.");
+			return null;
+		}
+
+		// 3. Extract Name - FIX: Use ctx.ID(0) because ctx.ID() returns a list of tokens.
+		String fieldName = ctx.ID(0).getText();
+
+		// 4. Extract Modifiers - FIX: Use the modifiers context and string logic from visitFieldDeclaration.
+		boolean isNative = true; // By definition of this visitor method
+
+		NebulaParser.ModifiersContext modifiersCtx = ctx.modifiers();
+		String modifiersString = modifiersCtx != null ? modifiersCtx.getText() : "";
+
+		boolean isStatic = modifiersString.contains("static");
+		boolean isConst = modifiersString.contains("const");
+		// In Nebula, a field is public if 'private' is not specified.
+		boolean isPublic = !modifiersString.contains("private");
+
+		// 6. Check for Redefinition - FIX: Use resolveLocally().isPresent() to match visitFieldDeclaration.
+		if (enclosingClass.resolveLocally(fieldName).isPresent())
+		{
+			// FIX: Use ID(0).getSymbol()
+			logError(ctx.ID(0).getSymbol(), "A member with the name '" + fieldName + "' is already defined in class '" + enclosingClass.getName() + "'.");
+			return null;
+		}
+
+		// 7. Create and Define the Symbol - FIX: Use VariableSymbol and align constructor arguments.
+		// Assuming VariableSymbol supports the 'isNative' flag for fields.
+		VariableSymbol fieldSymbol = new VariableSymbol(
+				fieldName,
+				fieldType,
+				isStatic,
+				isPublic,
+				isConst,
+				isNative
+		);
+
+		enclosingClass.define(fieldSymbol);
+
+		// Native fields typically do not have initializers in the Nebula source file
+		return null;
+	}
+
 
 	@Override
 	public Void visitPropertyDeclaration(NebulaParser.PropertyDeclarationContext ctx)

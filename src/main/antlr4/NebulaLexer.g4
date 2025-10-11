@@ -27,6 +27,7 @@ RETURN_KW: 'return';
 ALIAS_KW: 'alias';
 FOREACH_KW: 'foreach';
 IN_KW: 'in';
+IS_KW: 'is';
 GET_KW: 'get';
 SET_KW: 'set';
 NEW_KW: 'new';
@@ -36,8 +37,10 @@ PRIVATE_KW: 'private';
 STATIC_KW: 'static';
 CONST_KW: 'const';
 NATIVE_KW: 'native';
+OVERRIDE_KW: 'override';
 
 CLASS_KW: 'class';
+STRUCT_KW: 'struct';
 NAMESPACE_KW: 'namespace';
 IMPORT_KW: 'import';
 
@@ -54,6 +57,7 @@ FOR_KW: 'for';
 BREAK_KW: 'break';
 CONTINUE_KW: 'continue';
 SWITCH_KW: 'switch';
+MATCH_KW: 'match';
 CASE_KW: 'case';
 DEFAULT_KW: 'default';
 
@@ -168,13 +172,20 @@ BIT_L_SHIFT_COMP: '<<=';
 BIT_R_SHIFT_COMP: '>>=';
 
 // ---------------------- LITERALS ----------------------
+fragment EXPONENT: [eE] [+-]? DECIMAL_DIGITS;
+
 FLOAT_LITERAL
-    :   (DECIMAL_DIGITS '.' DECIMAL_DIGITS? | '.' DECIMAL_DIGITS | DECIMAL_DIGITS) [fF]
+    :   ( DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
+        | '.' DECIMAL_DIGITS EXPONENT?
+        | DECIMAL_DIGITS EXPONENT
+        ) [fF]
+    |   DECIMAL_DIGITS [fF] // Handles cases like 10f
     ;
 
 DOUBLE_LITERAL
-    :   DECIMAL_DIGITS '.' DECIMAL_DIGITS?
-    |   '.' DECIMAL_DIGITS
+    :   DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
+    |   '.' DECIMAL_DIGITS EXPONENT?
+    |   DECIMAL_DIGITS EXPONENT // Handles cases like 1e10
     ;
 
 HEX_LITERAL

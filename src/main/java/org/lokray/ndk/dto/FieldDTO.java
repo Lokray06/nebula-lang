@@ -7,4 +7,5 @@ public class FieldDTO
 	public boolean isNative = false;
 	public boolean isStatic = false;
 	public boolean isPublic = false;
+	public boolean isConst = false;
 }

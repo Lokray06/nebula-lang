@@ -9,8 +9,15 @@ options { tokenVocab = NebulaLexer; }
 
 // --- Top Level ---
 compilationUnit
-    :   ( importDeclaration | namespaceDeclaration | aliasDeclaration | classDeclaration )* EOF
-    ;
+    :   ( importDeclaration
+            | namespaceDeclaration
+            | aliasDeclaration
+            | classDeclaration
+            | nativeClassDeclaration         // allow native classes at top level
+            | structDeclaration
+            | nativeStructDeclaration       // allow native structs at top level
+            )* EOF
+        ;
 
 qualifiedName
     :   ID (DOT_SYM ID)*
@@ -22,24 +29,83 @@ importDeclaration
     ;
 
 namespaceDeclaration
-    :   NAMESPACE_KW qualifiedName L_CURLY_SYM (classDeclaration | nativeClassDeclaration)* R_CURLY_SYM
+    :   NAMESPACE_KW qualifiedName L_CURLY_SYM
+            ( classDeclaration
+            | nativeClassDeclaration
+            | structDeclaration
+            | nativeStructDeclaration
+            )*
+        R_CURLY_SYM
     ;
 
 aliasDeclaration
     :   ALIAS_KW ID EQUALS_SYM qualifiedName SEMI_SYM
     ;
 
-// --- Class Structure ---
+// --- Project Structure (Structural Types) ---
 
-// Retain your nativeClassDeclaration
-nativeClassDeclaration
-    :   NATIVE_KW modifiers? CLASS_KW ID L_CURLY_SYM nativeClassBody* R_CURLY_SYM
+structDeclaration
+    :   modifiers? STRUCT_KW ID L_CURLY_SYM structBody* R_CURLY_SYM
     ;
 
-// Retain your classDeclaration
+// Allow struct bodies to contain:
+//  - specialized struct fields (no initializer), OR normal fieldDeclaration (with initializer allowed), OR native fields
+structBody
+    :   structFieldDeclaration        // specialized rule for fields without initializers
+    |   fieldDeclaration              // allow normal (initialized) fields too if you want
+    |   nativeFieldDeclaration        // native fields (no initializer)
+    |   methodDeclaration
+    |   propertyDeclaration
+    |   constructorDeclaration
+    |   operatorOverloadMethodDeclaration
+    ;
+
+// NEW: nativeStructDeclaration - supports either a body or a forward-decl semicolon
+nativeStructDeclaration
+    :   NATIVE_KW modifiers? STRUCT_KW ID
+            ( L_CURLY_SYM nativeStructBody* R_CURLY_SYM
+            | SEMI_SYM                              // forward-declare native struct: `native struct Foo;`
+            )
+    ;
+
+// nativeStructBody mirrors nativeClassBody (native fields, methods, etc.)
+nativeStructBody
+    :   fieldDeclaration
+    |   nativeFieldDeclaration
+    |   methodDeclaration
+    |   nativeMethodDeclaration
+    |   propertyDeclaration
+    |   nativePropertyDeclaration
+    |   constructorDeclaration
+    |   nativeConstructorDeclaration
+    |   operatorOverloadMethodDeclaration
+    |   nativeOperatorOverloadMethodDeclaration
+    ;
+
+// NEW RULE: For fields inside a struct that cannot have initializers.
+// It uses a simplified variableDeclarator that *requires* ID only.
+structVariableDeclarator
+    :  type ID
+    ;
+
+// NEW RULE: Struct field declaration - excludes initializers for instance fields.
+structFieldDeclaration
+    :   modifiers? structVariableDeclarator (COMMA_SYM structVariableDeclarator)* SEMI_SYM
+    ;
+
+// --- Class Structure ---
+// Retain your nativeClassDeclaration
+nativeClassDeclaration
+    :   NATIVE_KW modifiers? CLASS_KW ID
+            ( L_CURLY_SYM nativeClassBody* R_CURLY_SYM
+            | SEMI_SYM
+            )
+    ;
+
 classDeclaration
     :   modifiers? CLASS_KW ID L_CURLY_SYM classBody* R_CURLY_SYM
     ;
+
 
 // Retain your classBody for regular classes
 classBody
@@ -138,7 +204,7 @@ variableDeclarator
     ;
 
 modifiers
-    :   (PUBLIC_KW | PRIVATE_KW | STATIC_KW | CONST_KW)+
+    :   (PUBLIC_KW | PRIVATE_KW | STATIC_KW | CONST_KW | OVERRIDE_KW)+
     ;
 
 // --- Type Definition ---

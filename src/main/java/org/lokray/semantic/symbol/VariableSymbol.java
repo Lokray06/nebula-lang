@@ -10,14 +10,21 @@ public class VariableSymbol implements Symbol
 	private final boolean isStatic;
 	private final boolean isPublic;
 	private final boolean isConst;
+	private final boolean isNative;
 
-	public VariableSymbol(String name, Type type, boolean isStatic, boolean isPublic, boolean isConst)
+	public VariableSymbol(String name, Type type, boolean isStatic, boolean isPublic, boolean isConst, boolean isNative)
 	{
 		this.name = name;
 		this.type = type;
 		this.isStatic = isStatic;
 		this.isPublic = isPublic;
 		this.isConst = isConst;
+		this.isNative = isNative;
+	}
+
+	public VariableSymbol(String name, Type type, boolean isStatic, boolean isPublic, boolean isConst)
+	{
+		this(name, type, isStatic, isPublic, isConst, false);
 	}
 
 	@Override
@@ -50,5 +57,9 @@ public class VariableSymbol implements Symbol
 	public boolean isConst()
 	{
 		return isConst;
+	}
+	public boolean isNative()
+	{
+		return isNative;
 	}
 }
