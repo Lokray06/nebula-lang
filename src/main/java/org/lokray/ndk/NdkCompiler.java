@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.Trees;
 import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.ndk.dto.NamespaceDTO;
 import org.lokray.parser.NebulaLexer;
@@ -67,6 +68,8 @@ public class NdkCompiler
 			var parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
 			trees.add(tree);
+			Debug.logDebug("Parsed AST:");
+			Debug.logDebug("Parse Tree:\n" + Trees.toStringTree(tree, parser));
 		}
 
 		// =========================================================
