@@ -12,6 +12,8 @@ public class NebulaCompilerArguments
 	private static final String BUILD_NDK = "--build-ndk";
 	private static final String NDK_OUT = "--ndk-out";
 	private static final String USE_NDK = "--use-ndk";
+	private static final String RUNTIME_LIB = "--runtime-lib";
+
 
 	private static final List<String> VALID_EXTENSIONS = Arrays.asList(".neb", ".nebproj");
 
@@ -20,15 +22,18 @@ public class NebulaCompilerArguments
 	private final Path buildNdkPath; // optional
 	private final Path ndkOutPath;   // optional
 	private final Path useNdkPath;   // optional
+	private final Path runtimeLibPath; // optional
+
 
 	private NebulaCompilerArguments(Path filePath, boolean ignoreExtension,
-	                                Path buildNdkPath, Path ndkOutPath, Path useNdkPath)
+	                                Path buildNdkPath, Path ndkOutPath, Path useNdkPath, Path runtimeLibPath)
 	{
 		this.filePath = filePath;
 		this.ignoreExtension = ignoreExtension;
 		this.buildNdkPath = buildNdkPath;
 		this.ndkOutPath = ndkOutPath;
 		this.useNdkPath = useNdkPath;
+		this.runtimeLibPath = runtimeLibPath;
 	}
 
 	public static NebulaCompilerArguments parse(String[] args)
@@ -44,6 +49,7 @@ public class NebulaCompilerArguments
 		Path buildNdk = null;
 		Path ndkOut = null;
 		Path useNdk = null;
+		Path runtimeLib = null;
 
 		for (int i = 0; i < args.length; i++)
 		{
@@ -79,6 +85,15 @@ public class NebulaCompilerArguments
 					}
 					useNdk = Paths.get(args[i]);
 				}
+				case RUNTIME_LIB ->
+				{
+					i++;
+					if (i >= args.length)
+					{
+						throw new IllegalArgumentException("Missing path after " + RUNTIME_LIB);
+					}
+					runtimeLib = Paths.get(args[i]);
+				}
 				default ->
 				{
 					if (filePath == null)
@@ -89,7 +104,7 @@ public class NebulaCompilerArguments
 			}
 		}
 
-		return new NebulaCompilerArguments(filePath, ignoreExtension, buildNdk, ndkOut, useNdk);
+		return new NebulaCompilerArguments(filePath, ignoreExtension, buildNdk, ndkOut, useNdk, runtimeLib);
 	}
 
 	public Path getFilePath()
@@ -117,6 +132,11 @@ public class NebulaCompilerArguments
 		return useNdkPath;
 	}
 
+	public Path getRuntimeLibPath()
+	{
+		return runtimeLibPath;
+	}
+
 	public void validateFile()
 	{
 		if (filePath == null)
@@ -136,3 +156,4 @@ public class NebulaCompilerArguments
 		}
 	}
 }
+

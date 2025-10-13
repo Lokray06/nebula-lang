@@ -32,11 +32,26 @@ public class ClassType implements Type
 	@Override
 	public boolean isAssignableTo(Type other)
 	{
-		if (this.equals(other) || other instanceof NullType)
+		if (this.equals(other))
 		{
 			return true;
 		}
-		// Add inheritance checks here in the future
+		if (other instanceof NullType)
+		{
+			// This is incorrect for structs, but ClassType is for classes which are reference types.
+			return true;
+		}
+		// TODO: Future enhancement for inheritance
+		// if (other instanceof ClassType) {
+		//     ClassSymbol current = this.classSymbol.getSuperClass();
+		//     while (current != null) {
+		//         if (current.getType().equals(other)) {
+		//             return true;
+		//         }
+		//         current = current.getSuperClass();
+		//     }
+		// }
+
 		return false;
 	}
 

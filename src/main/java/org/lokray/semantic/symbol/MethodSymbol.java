@@ -17,8 +17,7 @@ public class MethodSymbol extends Scope implements Symbol
 	private final boolean isConstructor;
 	private final boolean isNative;
 
-	public MethodSymbol(String name, Type returnType, List<ParameterSymbol> parameters, Scope enclosingScope,
-	                    boolean isStatic, boolean isPublic, boolean isConstructor, boolean isNative)
+	public MethodSymbol(String name, Type returnType, List<ParameterSymbol> parameters, Scope enclosingScope, boolean isStatic, boolean isPublic, boolean isConstructor, boolean isNative)
 	{
 		super(enclosingScope);
 		this.name = name;

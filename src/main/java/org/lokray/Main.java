@@ -5,17 +5,25 @@ import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.Trees;
+import org.lokray.codegen.CodeGenerator;
 import org.lokray.ndk.NdkCompiler;
 import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.SemanticAnalyzer;
 import org.lokray.util.Debug;
+import org.lokray.util.ErrorHandler;
 import org.lokray.util.NebulaCompilerArguments;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.lokray.util.ProcessUtils.executeCommand;
 
 public class Main
 {
@@ -23,6 +31,7 @@ public class Main
 	{
 		try
 		{
+			ErrorHandler errorHandler = new ErrorHandler();
 			NebulaCompilerArguments arguments = NebulaCompilerArguments.parse(args);
 			Path ndkBuild = arguments.getBuildNdkPath();
 			Path ndkOut = arguments.getNdkOutPath();
@@ -31,12 +40,11 @@ public class Main
 
 			if (ndkBuild != null)
 			{
-				NdkCompiler nc = new NdkCompiler(ndkBuild);
+				NdkCompiler nc = new NdkCompiler(ndkBuild, errorHandler);
 				LibraryDTO lib = nc.buildLibrary();
-				Path out = ndkOut != null ? ndkOut : ndkBuild.resolveSibling("ndk.neblib");
+				Path out = ndkOut != null ? ndkOut : ndkBuild.resolveSibling(ndkBuild.getFileName().toString() + ".neblib");
 				nc.writeLibrary(lib, out);
-				Path stub = out.getParent().resolve("nebula_runtime_stubs.c");
-				nc.emitRuntimeStub(lib, stub);
+				// No longer need to emit stubs, as we are building a real library
 				if (filePath == null)
 				{
 					return;
@@ -61,7 +69,10 @@ public class Main
 			Debug.logDebug("\nParsing...");
 			NebulaParser parser = new NebulaParser(tokens);
 			ParseTree tree = parser.compilationUnit();
-			Debug.logDebug("Parse Tree:\n" + Trees.toStringTree(tree, parser));
+			if (Debug.ENABLE_DEBUG)
+			{
+				Debug.logDebug("Parse Tree:\n" + Trees.toStringTree(tree, parser));
+			}
 
 			if (parser.getNumberOfSyntaxErrors() > 0)
 			{
@@ -70,7 +81,7 @@ public class Main
 			}
 
 			Debug.logDebug("\nSemantic analysis:");
-			SemanticAnalyzer analyzer = (useNdk != null) ? new SemanticAnalyzer(useNdk) : new SemanticAnalyzer();
+			SemanticAnalyzer analyzer = (useNdk != null) ? new SemanticAnalyzer(useNdk, errorHandler) : new SemanticAnalyzer(errorHandler);
 			boolean success = analyzer.analyze(tree);
 
 			if (!success)
@@ -80,7 +91,15 @@ public class Main
 			}
 
 			Debug.logInfo("Semantic analysis passed successfully!");
-			Debug.logInfo("Next step would be Code Generation.");
+			Debug.logInfo("Generating LLVM IR...");
+
+			Path llvmIrPath = filePath.resolveSibling(filePath.getFileName().toString().replaceFirst("[.][^.]+$", ".ll"));
+			CodeGenerator codeGenerator = new CodeGenerator(tree, analyzer, llvmIrPath);
+			codeGenerator.generate();
+
+			Debug.logInfo("Compiling and linking...");
+			compileAndLink(llvmIrPath, useNdk);
+
 		}
 		catch (IllegalArgumentException e)
 		{
@@ -95,5 +114,47 @@ public class Main
 			Debug.logError("Unexpected error: " + e.getMessage());
 			e.printStackTrace();
 		}
+	}
+
+	private static void compileAndLink(Path llvmIrPath, Path useNdkPath) throws IOException, InterruptedException
+	{
+		String baseName = llvmIrPath.getFileName().toString().replaceFirst("[.][^.]+$", "");
+		Path parentDir = llvmIrPath.getParent();
+		Path objectFile = parentDir.resolve(baseName + ".o");
+		Path executableFile = parentDir.resolve(baseName);
+
+		// --- Step 1: Compile LLVM IR to an object file using clang ---
+		Debug.logDebug("Compiling IR: clang -c " + llvmIrPath + " -o " + objectFile);
+		ProcessBuilder compileIr = new ProcessBuilder("clang", "-c", llvmIrPath.toString(), "-o", objectFile.toString());
+		executeCommand(compileIr);
+
+		// --- Step 2: Link the object file with the static library ---
+		List<String> linkCommand = new ArrayList<>();
+		linkCommand.add("clang++");
+		linkCommand.add(objectFile.toString());
+
+		if (useNdkPath != null)
+		{
+			// Infer static library path from the .neblib path
+			String libName = useNdkPath.getFileName().toString().replace(".neblib", "");
+			Path libPath = useNdkPath.resolveSibling("lib" + libName + ".a");
+
+			if (!Files.exists(libPath))
+			{
+				Debug.logError("Static library not found at inferred path: " + libPath);
+				return;
+			}
+			// Add the static library to the linker command
+			linkCommand.add(libPath.toAbsolutePath().toString());
+		}
+
+		linkCommand.add("-o");
+		linkCommand.add(executableFile.toString());
+
+		Debug.logDebug("Linking: " + String.join(" ", linkCommand));
+		ProcessBuilder link = new ProcessBuilder(linkCommand);
+		executeCommand(link);
+
+		Debug.logInfo("Compilation successful! Executable created at: " + executableFile);
 	}
 }

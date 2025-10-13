@@ -6,6 +6,7 @@ import org.lokray.parser.NebulaParserBaseVisitor;
 import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.type.*;
 import org.lokray.util.Debug;
+import org.lokray.util.ErrorHandler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,33 +18,22 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	private final Scope root;
 	private Scope currentScope;
 	private ClassSymbol currentClass;
-	private boolean hasErrors = false;
+	private final ErrorHandler errorHandler;
 	private Map<String, ClassSymbol> declaredClasses;
+	private final boolean discoveryOnly;
 
-	public SymbolTableBuilder(Scope root, Map<String, ClassSymbol> declaredClasses)
+	public SymbolTableBuilder(Scope root, Map<String, ClassSymbol> declaredClasses, ErrorHandler errorHandler, boolean discoveryOnly)
 	{
 		this.root = root;
 		this.currentScope = root;
 		this.declaredClasses = declaredClasses;
+		this.errorHandler = errorHandler;
+		this.discoveryOnly = discoveryOnly;
 	}
 
 	public boolean hasErrors()
 	{
-		return hasErrors;
-	}
-
-	private void logError(org.antlr.v4.runtime.Token token, String msg)
-	{
-		// New Format: [Semantic Error] current class name - line:char - msg
-		// Get the current class name or an empty string if not inside a class
-		String className = currentClass != null ? currentClass.getName() : "";
-
-		// Format the error string
-		String err = String.format("[Semantic Error] %s - line %d:%d - %s",
-				className, token.getLine(), token.getCharPositionInLine() + 1, msg);
-
-		Debug.logError(err);
-		hasErrors = true;
+		return errorHandler.hasErrors();
 	}
 
 	private String getFqn(NebulaParser.QualifiedNameContext ctx)
@@ -75,7 +65,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 					{
 						if (name.equals(existing.getName()))
 						{
-							logError(elementCtx.ID().getSymbol(), "Duplicate tuple element name '" + name + "'.");
+							errorHandler.logError(elementCtx.ID().getSymbol(), "Duplicate tuple element name '" + name + "'.", currentClass);
 						}
 					}
 				}
@@ -95,7 +85,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		}
 		else
 		{
-			logError(ctx.start, "Unsupported type structure.");
+			errorHandler.logError(ctx.start, "Unsupported type structure.", currentClass);
 			return ErrorType.INSTANCE;
 		}
 		Optional<Symbol> typeSymbol = currentScope.resolve(baseTypeName);
@@ -111,6 +101,10 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	@Override
 	public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
 	{
+		if (discoveryOnly)
+		{
+			return null; // Skip imports in the first pass
+		}
 		String fqn = getFqn(ctx.qualifiedName());
 		String[] parts = fqn.split("\\.");
 		String simpleName = parts[parts.length - 1];
@@ -126,7 +120,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			Optional<Symbol> resolved = root.resolvePath(fqn); // You may need to implement resolvePath
 			if (resolved.isEmpty())
 			{
-				logError(ctx.qualifiedName().start, "Cannot find type to import: '" + fqn + "'.");
+				errorHandler.logError(ctx.qualifiedName().start, "Cannot find type to import: '" + fqn + "'.", currentClass);
 				return null;
 			}
 			targetSymbol = resolved.get();
@@ -136,7 +130,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		// Check for conflicts in the current scope (e.g., the file's top-level scope)
 		if (currentScope.resolveLocally(simpleName).isPresent())
 		{
-			logError(ctx.qualifiedName().start, "A symbol named '" + simpleName + "' is already defined or imported in this scope.");
+			errorHandler.logError(ctx.qualifiedName().start, "A symbol named '" + simpleName + "' is already defined or imported in this scope.", currentClass);
 			return null;
 		}
 
@@ -158,13 +152,13 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		if (targetSymbol.isEmpty())
 		{
-			logError(ctx.qualifiedName().start, "Cannot resolve alias target '" + targetFqn + "'.");
+			errorHandler.logError(ctx.qualifiedName().start, "Cannot resolve alias target '" + targetFqn + "'.", currentClass);
 			return null;
 		}
 
 		if (currentScope.resolveLocally(aliasName).isPresent())
 		{
-			logError(ctx.ID().getSymbol(), "Cannot create alias '" + aliasName + "', a symbol with that name already exists in this scope.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Cannot create alias '" + aliasName + "', a symbol with that name already exists in this scope.", currentClass);
 			return null;
 		}
 
@@ -205,15 +199,15 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		String className = ctx.ID().getText();
 		if (currentScope.resolveLocally(className).isPresent())
 		{
-			logError(ctx.ID().getSymbol(), "Type '" + className + "' is already defined in this scope.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Type '" + className + "' is already defined in this scope.", currentClass);
 			return null;
 		}
 		boolean isPublic = ctx.modifiers() != null ? ctx.modifiers().getText().contains("public") : false;
 		ClassSymbol cs = new ClassSymbol(className, currentScope, false, isPublic);
 
-		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-		String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
-		declaredClasses.put(fqn, cs);
+			String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+			String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
+			declaredClasses.put(fqn, cs);
 
 		Debug.logDebug("Defined class " + cs.getName());
 		currentScope.define(cs);
@@ -282,51 +276,61 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	public Void visitStructDeclaration(NebulaParser.StructDeclarationContext ctx)
 	{
 		String structName = ctx.ID().getText();
-		if (currentScope.resolveLocally(structName).isPresent())
+
+		if (discoveryOnly)
 		{
-			logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.");
-			return null;
+			// --- PASS 1: DISCOVERY ---
+			if (currentScope.resolveLocally(structName).isPresent())
+			{
+				errorHandler.logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.", currentClass);
+				return null;
+			}
+			boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+			StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, false);
+
+			String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+			String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
+			declaredClasses.put(fqn, structSymbol);
+
+			Debug.logDebug("Defined struct " + structSymbol.getName());
+			currentScope.define(structSymbol);
+			// Do NOT visit children in this pass.
 		}
-
-		boolean isPublic = ctx.modifiers() == null || ctx.modifiers().getText().contains("public");
-
-		// --- MODIFIED PART ---
-		// Create a StructSymbol for the struct.
-		StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, false);
-		// --- END MODIFIED PART ---
-
-		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-		String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
-		declaredClasses.put(fqn, structSymbol); // It's a ClassSymbol subclass, so this map still works
-
-		Debug.logDebug("Defined struct " + structSymbol.getName());
-		currentScope.define(structSymbol);
-
-		ClassSymbol oldClass = currentClass;
-		currentClass = structSymbol;
-		Scope oldScope = currentScope;
-		currentScope = structSymbol;
-
-		visitChildren(ctx);
-
-		if (!structSymbol.getMethodsByName().containsKey(structSymbol.getName()))
+		else
 		{
-			MethodSymbol defaultCtor = new MethodSymbol(
-					structSymbol.getName(),
-					structSymbol.getType(), // This will now correctly be a StructType
-					new ArrayList<>(),
-					structSymbol,
-					false, // not static
-					true,  // public
-					true,  // isConstructor
-					false  // not native
-			);
-			structSymbol.defineMethod(defaultCtor);
+			// --- PASS 2: MEMBER DEFINITION ---
+			Optional<Symbol> symbol = currentScope.resolveLocally(structName);
+			if (symbol.isEmpty() || !(symbol.get() instanceof StructSymbol))
+			{
+				return null; // Internal error
+			}
+
+			StructSymbol structSymbol = (StructSymbol) symbol.get();
+			ClassSymbol oldClass = currentClass;
+			currentClass = structSymbol;
+			Scope oldScope = currentScope;
+			currentScope = structSymbol;
+
+			visitChildren(ctx);
+
+			if (!structSymbol.getMethodsByName().containsKey(structSymbol.getName()))
+			{
+				MethodSymbol defaultCtor = new MethodSymbol(
+						structSymbol.getName(),
+						structSymbol.getType(),
+						new ArrayList<>(),
+						structSymbol,
+						false, // not static
+						true,  // public
+						true,  // isConstructor
+						false  // not native
+				);
+				structSymbol.defineMethod(defaultCtor);
+			}
+
+			currentScope = oldScope;
+			currentClass = oldClass;
 		}
-
-		currentScope = oldScope;
-		currentClass = oldClass;
-
 		return null;
 	}
 
@@ -334,36 +338,45 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	public Void visitNativeStructDeclaration(NebulaParser.NativeStructDeclarationContext ctx)
 	{
 		String structName = ctx.ID().getText();
-		if (currentScope.resolveLocally(structName).isPresent())
+
+		if (discoveryOnly)
 		{
-			logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.");
-			return null;
+			// --- PASS 1: DISCOVERY ---
+			if (currentScope.resolveLocally(structName).isPresent())
+			{
+				errorHandler.logError(ctx.ID().getSymbol(), "Type '" + structName + "' is already defined in this scope.", currentClass);
+				return null;
+			}
+			boolean isPublic = ctx.modifiers() != null && ctx.modifiers().getText().contains("public");
+			StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, true);
+
+			String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+			String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
+			declaredClasses.put(fqn, structSymbol);
+
+			Debug.logDebug("Defined native struct " + structSymbol.getName());
+			currentScope.define(structSymbol);
+			// Do NOT visit children in this pass.
 		}
+		else
+		{
+			// --- PASS 2: MEMBER DEFINITION ---
+			Optional<Symbol> symbol = currentScope.resolveLocally(structName);
+			if (symbol.isEmpty() || !(symbol.get() instanceof StructSymbol))
+			{
+				return null; // Internal error
+			}
+			StructSymbol structSymbol = (StructSymbol) symbol.get();
+			ClassSymbol oldClass = currentClass;
+			currentClass = structSymbol;
+			Scope oldScope = currentScope;
+			currentScope = structSymbol;
 
-		boolean isPublic = ctx.modifiers() != null && ctx.modifiers().getText().contains("public");
+			visitChildren(ctx);
 
-		// Use the new constructor to create a native StructSymbol
-		StructSymbol structSymbol = new StructSymbol(structName, currentScope, isPublic, true);
-
-		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-		String fqn = namespacePrefix.isEmpty() ? structName : namespacePrefix + "." + structName;
-		declaredClasses.put(fqn, structSymbol);
-
-		Debug.logDebug("Defined native struct " + structSymbol.getName());
-		currentScope.define(structSymbol);
-
-		// --- SCOPE SHIFT ---
-		ClassSymbol oldClass = currentClass;
-		currentClass = structSymbol;
-		Scope oldScope = currentScope;
-		currentScope = structSymbol;
-
-		visitChildren(ctx);
-
-		// --- SCOPE RESTORE ---
-		currentScope = oldScope;
-		currentClass = oldClass;
-
+			currentScope = oldScope;
+			currentClass = oldClass;
+		}
 		return null;
 	}
 
@@ -372,7 +385,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.ID().getSymbol(), "Method defined outside of a class.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Method defined outside of a class.", currentClass);
 			return null;
 		}
 		Type returnType = resolveTypeFromCtx(ctx.type());
@@ -404,7 +417,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.ID().getSymbol(), "Constructor defined outside of a class.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Constructor defined outside of a class.", currentClass);
 			return null;
 		}
 
@@ -433,7 +446,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.ID().getSymbol(), "Method defined outside of a class.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Method defined outside of a class.", currentClass);
 			return null;
 		}
 		Type returnType = resolveTypeFromCtx(ctx.type());
@@ -463,7 +476,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.start, "Field defined outside of a class.");
+			errorHandler.logError(ctx.start, "Field defined outside of a class.", currentClass);
 			return null;
 		}
 		Type fieldType = resolveTypeFromCtx(ctx.type());
@@ -476,7 +489,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			String varName = declarator.ID().getText();
 			if (currentClass.resolveLocally(varName).isPresent())
 			{
-				logError(declarator.ID().getSymbol(), "Field '" + varName + "' is already defined in this class.");
+				errorHandler.logError(declarator.ID().getSymbol(), "Field '" + varName + "' is already defined in this class.", currentClass);
 				continue;
 			}
 			VariableSymbol vs = new VariableSymbol(varName, fieldType, isStatic, isPublic, isConst);
@@ -499,7 +512,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		// 1. Check if the declaration is inside a class
 		if (!(currentScope instanceof ClassSymbol))
 		{
-			logError(ctx.start, "Native fields must be declared inside a class scope.");
+			errorHandler.logError(ctx.start, "Native fields must be declared inside a class scope.", currentClass);
 			return null;
 		}
 
@@ -512,7 +525,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		if (fieldType == null)
 		{
-			logError(ctx.type().start, "Cannot resolve type '" + ctx.type().getText() + "' for native field.");
+			errorHandler.logError(ctx.type().start, "Cannot resolve type '" + ctx.type().getText() + "' for native field.", currentClass);
 			return null;
 		}
 
@@ -534,7 +547,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		if (enclosingClass.resolveLocally(fieldName).isPresent())
 		{
 			// FIX: Use ID(0).getSymbol()
-			logError(ctx.ID(0).getSymbol(), "A member with the name '" + fieldName + "' is already defined in class '" + enclosingClass.getName() + "'.");
+			errorHandler.logError(ctx.ID(0).getSymbol(), "A member with the name '" + fieldName + "' is already defined in class '" + enclosingClass.getName() + "'.", currentClass);
 			return null;
 		}
 
@@ -561,7 +574,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	{
 		if (currentClass == null)
 		{
-			logError(ctx.ID().getSymbol(), "Property defined outside of a class.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Property defined outside of a class.", currentClass);
 			return null;
 		}
 		Type propType = resolveTypeFromCtx(ctx.type());
@@ -569,7 +582,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 		if (currentClass.resolveLocally(propName).isPresent())
 		{
-			logError(ctx.ID().getSymbol(), "Member '" + propName + "' is already defined in this class.");
+			errorHandler.logError(ctx.ID().getSymbol(), "Member '" + propName + "' is already defined in this class.", currentClass);
 			return null;
 		}
 

@@ -1,4 +1,4 @@
-// File: src/main/java/org/lokray/semantic/SymbolDTOConverter.java
+// File: src/main/java/org/lokray/util/SymbolDTOConverter.java
 package org.lokray.util;
 
 import org.lokray.ndk.dto.*;
@@ -48,52 +48,48 @@ public class SymbolDTOConverter
 	{
 		ClassDTO dto = new ClassDTO();
 		dto.name = cs.getName();
-		dto.isNative = cs.isNative(); // CHANGE: Use the new boolean field
+		dto.isNative = cs.isNative();
 
-		cs.forEachSymbol((n, s) ->
+		// **Corrected:** Iterate over the dedicated method map that stores all overloads.
+		cs.getMethodsByName().values().forEach(overloadList ->
 		{
-			if (s instanceof MethodSymbol ms)
+			overloadList.forEach(ms ->
 			{
 				MethodDTO md = new MethodDTO();
 				md.name = ms.getName();
 				md.isStatic = ms.isStatic();
 				md.isNative = ms.isNative();
 				md.isPublic = ms.isPublic();
-				md.returnType = ms.getType().getName(); // Use the type name/FQN
+				md.returnType = ms.getType().getName();
 
-				// --- MODIFICATION HERE ---
-				// Iterate over the new ParameterSymbol list
 				for (ParameterSymbol ps : ms.getParameters())
 				{
 					ParameterDTO pd = new ParameterDTO();
 					pd.name = ps.getName();
-
-					// Use the Unresolved Type Name (like "Object" or "string")
-					// which is what the JSON is expected to contain before resolution
 					pd.type = ps.getType().getName();
-
 					md.parameters.add(pd);
 				}
-				// --- END MODIFICATION ---
-
 				dto.methods.add(md);
-			}
-			else if (s instanceof VariableSymbol vs)
-			{
-				FieldDTO fd = new FieldDTO();
-				fd.name = vs.getName();
-				// CHANGE: Convert Type object to its name string
-				fd.type = vs.getType().getName();
-
-				// Modifiers
-				fd.isNative = vs.isNative();
-				fd.isConst = vs.isConst();
-				fd.isPublic = vs.isPublic();
-				fd.isStatic = vs.isStatic();
-
-				dto.fields.add(fd);
-			}
+			});
 		});
+
+		// **Corrected:** Iterate over the general symbol map specifically for fields,
+		// excluding any method symbols that might also be present.
+		cs.getSymbols().values().stream()
+				.filter(s -> s instanceof VariableSymbol && !(s instanceof MethodSymbol))
+				.forEach(s ->
+				{
+					VariableSymbol vs = (VariableSymbol) s;
+					FieldDTO fd = new FieldDTO();
+					fd.name = vs.getName();
+					fd.type = vs.getType().getName();
+					fd.isNative = vs.isNative();
+					fd.isConst = vs.isConst();
+					fd.isPublic = vs.isPublic();
+					fd.isStatic = vs.isStatic();
+					dto.fields.add(fd);
+				});
+
 		return dto;
 	}
 
@@ -101,52 +97,48 @@ public class SymbolDTOConverter
 	{
 		StructDTO dto = new StructDTO();
 		dto.name = ss.getName();
-		dto.isNative = ss.isNative(); // CHANGE: Use the new boolean field
+		dto.isNative = ss.isNative();
 
-		ss.forEachSymbol((n, s) ->
+		// **Corrected:** Iterate over the dedicated method map that stores all overloads.
+		ss.getMethodsByName().values().forEach(overloadList ->
 		{
-			if (s instanceof MethodSymbol ms)
+			overloadList.forEach(ms ->
 			{
 				MethodDTO md = new MethodDTO();
 				md.name = ms.getName();
 				md.isStatic = ms.isStatic();
 				md.isNative = ms.isNative();
 				md.isPublic = ms.isPublic();
-				md.returnType = ms.getType().getName(); // Use the type name/FQN
+				md.returnType = ms.getType().getName();
 
-				// --- MODIFICATION HERE ---
-				// Iterate over the new ParameterSymbol list
 				for (ParameterSymbol ps : ms.getParameters())
 				{
 					ParameterDTO pd = new ParameterDTO();
 					pd.name = ps.getName();
-
-					// Use the Unresolved Type Name (like "Object" or "string")
-					// which is what the JSON is expected to contain before resolution
 					pd.type = ps.getType().getName();
-
 					md.parameters.add(pd);
 				}
-				// --- END MODIFICATION ---
-
 				dto.methods.add(md);
-			}
-			else if (s instanceof VariableSymbol vs)
-			{
-				FieldDTO fd = new FieldDTO();
-				fd.name = vs.getName();
-				// CHANGE: Convert Type object to its name string
-				fd.type = vs.getType().getName();
-
-				// Modifiers
-				fd.isNative = vs.isNative();
-				fd.isConst = vs.isConst();
-				fd.isPublic = vs.isPublic();
-				fd.isStatic = vs.isStatic();
-
-				dto.fields.add(fd);
-			}
+			});
 		});
+
+		// **Corrected:** Iterate over the general symbol map specifically for fields,
+		// excluding any method symbols that might also be present.
+		ss.getSymbols().values().stream()
+				.filter(s -> s instanceof VariableSymbol && !(s instanceof MethodSymbol))
+				.forEach(s ->
+				{
+					VariableSymbol vs = (VariableSymbol) s;
+					FieldDTO fd = new FieldDTO();
+					fd.name = vs.getName();
+					fd.type = vs.getType().getName();
+					fd.isNative = vs.isNative();
+					fd.isConst = vs.isConst();
+					fd.isPublic = vs.isPublic();
+					fd.isStatic = vs.isStatic();
+					dto.fields.add(fd);
+				});
+
 		return dto;
 	}
 }

@@ -79,14 +79,38 @@ public class ClassSymbol extends Scope implements Symbol
 	}
 
 	/**
+	 * Overrides the default scope resolution to handle methods and fields within a class.
+	 *
+	 * @param name The simple name of the symbol to resolve.
+	 * @return An Optional containing the resolved Symbol, or empty if not found.
+	 */
+	@Override
+	public Optional<Symbol> resolveLocally(String name)
+	{
+		// First, try to resolve non-method symbols (fields, properties) from the regular symbol map.
+		Optional<Symbol> symbol = super.resolveLocally(name);
+		if (symbol.isPresent())
+		{
+			return symbol;
+		}
+
+		// If no field/property is found, check if it's a method name.
+		if (methodsByName.containsKey(name))
+		{
+			// It's a method group. Return the first overload as a representative symbol.
+			// The full overload resolution logic in TypeCheckVisitor will handle the rest.
+			return Optional.of(methodsByName.get(name).get(0));
+		}
+
+		return Optional.empty();
+	}
+
+	/**
 	 * Finds methods that are structurally viable for a given set of arguments,
 	 * checking arity, named parameter correctness, and default value availability.
 	 * This pass does NOT check for type compatibility.
 	 */
-	public List<MethodSymbol> findViableMethods(
-			String name,
-			List<NebulaParser.ExpressionContext> positionalArgs,
-			Map<String, NebulaParser.ExpressionContext> namedArgs)
+	public List<MethodSymbol> findViableMethods(String name, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
 	{
 		List<MethodSymbol> candidates = resolveMethods(name);
 		List<MethodSymbol> viableCandidates = new ArrayList<>();
@@ -210,5 +234,73 @@ public class ClassSymbol extends Scope implements Symbol
 	public boolean isPublic()
 	{
 		return isPublic;
+	}
+
+	/**
+	 * The main entry point for overload resolution. Finds the single best method
+	 * overload for a given call, considering arity, names, type compatibility,
+	 * and specificity.
+	 *
+	 * @param visitor        The TypeCheckVisitor instance, used to resolve argument types.
+	 * @param name           The name of the method being called.
+	 * @param positionalArgs The list of positional argument expressions.
+	 * @param namedArgs      A map of named argument expressions.
+	 * @return An Optional containing the best-fit MethodSymbol, or empty if no unambiguous match is found.
+	 */
+	public Optional<MethodSymbol> resolveOverload(org.lokray.semantic.TypeCheckVisitor visitor, String name, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
+	{
+		// Phase 1: Find structurally viable candidates (checks arity, names, defaults)
+		List<MethodSymbol> candidates = findViableMethods(name, positionalArgs, namedArgs);
+		if (candidates.isEmpty())
+		{
+			return Optional.empty(); // No structurally viable methods found.
+		}
+
+		// Phase 2: Filter by argument type compatibility
+		List<MethodSymbol> typeCompatible = new ArrayList<>();
+		for (MethodSymbol m : candidates)
+		{
+			if (visitor.areArgumentsAssignableTo(m, positionalArgs, namedArgs))
+			{
+				typeCompatible.add(m);
+			}
+		}
+
+		if (typeCompatible.isEmpty())
+		{
+			return Optional.empty(); // No methods match the argument types.
+		}
+
+		if (typeCompatible.size() == 1)
+		{
+			return Optional.of(typeCompatible.get(0)); // Only one match, we're done.
+		}
+
+		// Phase 3: Disambiguation by Argument Specificity (Tie-breaker)
+		MethodSymbol bestMatch = null;
+		int minCost = Integer.MAX_VALUE;
+		boolean isAmbiguous = false;
+
+		for (MethodSymbol candidate : typeCompatible)
+		{
+			int currentCost = visitor.calculateArgumentMatchCost(candidate, positionalArgs, namedArgs);
+			if (currentCost < minCost)
+			{
+				minCost = currentCost;
+				bestMatch = candidate;
+				isAmbiguous = false;
+			}
+			else if (currentCost == minCost)
+			{
+				isAmbiguous = true;
+			}
+		}
+
+		if (isAmbiguous)
+		{
+			return Optional.empty(); // Ambiguous call
+		}
+
+		return Optional.ofNullable(bestMatch);
 	}
 }

@@ -1,11 +1,13 @@
 // File: src/main/java/org/lokray/semantic/SemanticAnalyzer.java
 package org.lokray.semantic;
 
+import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.type.*;
 import org.lokray.util.BuiltInTypeLoader;
 import org.lokray.util.Debug;
+import org.lokray.util.ErrorHandler;
 import org.lokray.util.NebulaLibLoader;
 
 import java.nio.file.Files;
@@ -19,9 +21,11 @@ public class SemanticAnalyzer
 	private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
 	private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
 	private final Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
+	private final ErrorHandler errorHandler;
 
-	public SemanticAnalyzer(Path ndkLib)
+	public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
 	{
+		this.errorHandler = errorHandler;
 		// Define all primitive types first
 		BuiltInTypeLoader.definePrimitives(globalScope);
 
@@ -51,20 +55,33 @@ public class SemanticAnalyzer
 		}
 	}
 
-	public SemanticAnalyzer()
+	public SemanticAnalyzer(ErrorHandler errorHandler)
 	{
-		this(null);
+		this(null, errorHandler);
 	}
 
 	public boolean analyze(ParseTree tree)
 	{
 		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members.
 		Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
-		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses);
+		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
+
+		// Debugging
 		Debug.logDebug("  Resolved types:");
 		for (ClassSymbol type : declaredClasses.values())
 		{
 			Debug.logDebug("    -" + type.getName());
+			// Print here all the methods defined in the class
+			// Iterate over the lists of overloads (Map values)
+			for (List<MethodSymbol> overloads : type.getMethodsByName().values())
+			{
+				for (MethodSymbol method : overloads)
+				{
+					Debug.logDebug("        - Method: " + method.getName()
+							+ " (" + method.getParameterTypes().size() + " parameters, returns "
+							+ method.getType().getName() + ")");
+				}
+			}
 		}
 		defVisitor.visit(tree);
 
@@ -76,7 +93,7 @@ public class SemanticAnalyzer
 
 		// Pass 3: Type Checking and Resolution for method bodies and initializers
 		Debug.logDebug("\nType checking...");
-		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes);
+		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, errorHandler);
 		refVisitor.visit(tree);
 		this.hasErrors = refVisitor.hasErrors();
 
@@ -207,11 +224,63 @@ public class SemanticAnalyzer
 
 	public Optional<Symbol> getResolvedSymbol(ParseTree node)
 	{
-		return Optional.ofNullable(resolvedSymbols.get(node));
+		if (node == null)
+		{
+			return Optional.empty();
+		}
+
+		// fast path: direct object-equality lookup
+		Symbol s = resolvedSymbols.get(node);
+		if (s != null)
+		{
+			return Optional.of(s);
+		}
+
+		// fallback: match by source interval (start/stop token indices)
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{
+			return Optional.empty();
+		}
+
+		for (ParseTree key : resolvedSymbols.keySet())
+		{
+			Interval kint = key.getSourceInterval();
+			if (kint != null && kint.equals(target))
+			{
+				return Optional.ofNullable(resolvedSymbols.get(key));
+			}
+		}
+		return Optional.empty();
 	}
 
 	public Optional<Type> getResolvedType(ParseTree node)
 	{
-		return Optional.ofNullable(resolvedTypes.get(node));
+		if (node == null)
+		{
+			return Optional.empty();
+		}
+
+		Type t = resolvedTypes.get(node);
+		if (t != null)
+		{
+			return Optional.of(t);
+		}
+
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{
+			return Optional.empty();
+		}
+
+		for (ParseTree key : resolvedTypes.keySet())
+		{
+			Interval kint = key.getSourceInterval();
+			if (kint != null && kint.equals(target))
+			{
+				return Optional.ofNullable(resolvedTypes.get(key));
+			}
+		}
+		return Optional.empty();
 	}
 }

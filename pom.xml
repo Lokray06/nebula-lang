@@ -25,6 +25,11 @@
             <artifactId>gson</artifactId>
             <version>2.13.2</version>
         </dependency>
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>llvm-platform</artifactId>
+            <version>20.1.7-1.5.12</version>
+        </dependency>
     </dependencies>
 
     <build>

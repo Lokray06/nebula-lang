@@ -11,6 +11,7 @@ import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.type.*;
 import org.lokray.util.Debug;
+import org.lokray.util.ErrorHandler;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -26,24 +27,25 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	private ClassSymbol currentClass;
 	private MethodSymbol currentMethod;
 	private Type expectedType = null;
-	private boolean hasErrors = false;
+	private ErrorHandler errorHandler;
 
 	private final Map<String, ClassSymbol> declaredClasses;
 	private final Map<ParseTree, Symbol> resolvedSymbols;
 	private final Map<ParseTree, Type> resolvedTypes;
 
-	public TypeCheckVisitor(Scope globalScope, Map<String, ClassSymbol> declaredClasses, Map<ParseTree, Symbol> symbols, Map<ParseTree, Type> types)
+	public TypeCheckVisitor(Scope globalScope, Map<String, ClassSymbol> declaredClasses, Map<ParseTree, Symbol> symbols, Map<ParseTree, Type> types, ErrorHandler errorhandler)
 	{
 		this.globalScope = globalScope;
 		this.currentScope = globalScope;
 		this.declaredClasses = declaredClasses;
 		this.resolvedSymbols = symbols;
 		this.resolvedTypes = types;
+		this.errorHandler = errorhandler;
 	}
 
 	public boolean hasErrors()
 	{
-		return hasErrors;
+		return errorHandler.hasErrors();
 	}
 
 	private void logError(org.antlr.v4.runtime.Token token, String msg)
@@ -56,7 +58,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		String err = String.format("[Semantic Error] %s - line %d:%d - %s", className, token.getLine(), token.getCharPositionInLine() + 1, msg);
 
 		Debug.logError(err);
-		hasErrors = true;
+		//errorHandler. = true;
 	}
 
 	private void note(ParseTree ctx, Symbol symbol)
@@ -225,6 +227,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		currentClass = (ClassSymbol) currentScope.resolveLocally(className).orElse(null);
 		if (currentClass == null)
 		{
+			Debug.logWarning("Class itself is apparently null??");
 			return null;
 		}
 		currentScope = currentClass;
@@ -392,7 +395,9 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	 */
 	private Type visitMethodCall(ParserRuleContext callCtx, ClassSymbol classSymbol, String methodName, NebulaParser.ArgumentListContext argListCtx)
 	{
-		// 1. Separate arguments into positional and named expressions
+		// Debug not showing
+		Debug.logDebug("Visiting method call: " + methodName);
+
 		List<NebulaParser.ExpressionContext> positionalArgs = new ArrayList<>();
 		Map<String, NebulaParser.ExpressionContext> namedArgs = new HashMap<>();
 		if (argListCtx != null)
@@ -404,20 +409,18 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 					String name = namedArg.ID().getText();
 					if (namedArgs.containsKey(name))
 					{
-						logError(namedArg.ID().getSymbol(), "Duplicate named argument '" + name + "'.");
+						errorHandler.logError(namedArg.ID().getSymbol(), "Duplicate named argument '" + name + "'.", currentClass);
 						return ErrorType.INSTANCE;
 					}
 					namedArgs.put(name, namedArg.expression());
 				}
 				else if (child instanceof NebulaParser.ExpressionContext positionalArg)
 				{
-					// This check is crucial: a named argument also contains an expression,
-					// but it's not a *direct* child of the argumentList. We only want direct children.
 					if (positionalArg.getParent() == argListCtx)
 					{
 						if (!namedArgs.isEmpty())
 						{
-							logError(positionalArg.start, "Positional arguments cannot follow named arguments.");
+							errorHandler.logError(positionalArg.start, "Positional arguments cannot follow named arguments.", currentClass);
 							return ErrorType.INSTANCE;
 						}
 						positionalArgs.add(positionalArg);
@@ -426,160 +429,82 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 
-		// 2. Phase 1: Find structurally viable candidates (checks arity, names, defaults)
-		List<MethodSymbol> candidates = classSymbol.findViableMethods(methodName, positionalArgs, namedArgs);
+		Optional<MethodSymbol> resolvedMethodOpt = classSymbol.resolveOverload(this, methodName, positionalArgs, namedArgs);
 
-		if (candidates.isEmpty())
+		if (resolvedMethodOpt.isEmpty())
 		{
-			// --- START OF NEW ERROR CHECKING LOGIC ---
+			List<MethodSymbol> viableCandidates = classSymbol.findViableMethods(methodName, positionalArgs, namedArgs);
 
-			// Check 1: Unknown Named Argument (Only if named args were provided)
-			if (!namedArgs.isEmpty())
+			if (viableCandidates.isEmpty())
 			{
-				Set<String> allValidParamNames = classSymbol.resolveMethods(methodName).stream()
-						.flatMap(m -> m.getParameters().stream().map(Symbol::getName))
-						.collect(Collectors.toSet());
-
-				for (String argName : namedArgs.keySet())
+				if (!namedArgs.isEmpty())
 				{
-					if (!allValidParamNames.contains(argName))
+					Set<String> allValidParamNames = classSymbol.resolveMethods(methodName).stream()
+							.flatMap(m -> m.getParameters().stream().map(Symbol::getName))
+							.collect(Collectors.toSet());
+
+					for (String argName : namedArgs.keySet())
 					{
-						// Found an unknown named argument!
-						// Retrieve all method signatures for a better error message
-						String signatures = classSymbol.resolveMethods(methodName).stream()
-								.map(m -> m.getName() + m.getParameters().stream().map(p -> p.getType().getName() + " " + p.getName()).collect(Collectors.joining(", ", "(", ")")))
-								.collect(Collectors.joining(", "));
-
-						logError(callCtx.start, "Parameter with name '" + argName + "' not found in any overload of '" + methodName + "'. Available signatures: " + signatures);
-						return ErrorType.INSTANCE;
-					}
-				}
-			}
-			// Note: If named arguments were used and all names were valid, but no overload was viable (e.g., missing a required positional arg),
-			// we fall through to the generic arity error which is still slightly misleading, but an improvement.
-
-			// Check 2: Too Many/Wrong Arity/General Structural Mismatch
-			int argCount = positionalArgs.size() + namedArgs.size();
-			String errorMsg = "No viable overload for method '" + methodName + "' takes " + argCount + " arguments.";
-
-			// If there are any overloads at all, list their viable arities for clarity (min to max, inclusive)
-			List<MethodSymbol> allOverloads = classSymbol.resolveMethods(methodName);
-			if (!allOverloads.isEmpty())
-			{
-				Set<Integer> expectedArities = new TreeSet<>(); // Use TreeSet for unique and sorted arities
-
-				for (MethodSymbol m : allOverloads)
-				{
-					int maxArgs = m.getParameters().size();
-
-					// ASSUMPTION: The ParameterSymbol has an 'isOptional()' method to check for default values.
-					// The minimum number of required arguments is the count of non-optional parameters.
-					int minArgs = (int) m.getParameters().stream()
-							.filter(p -> !p.hasDefaultValue()) // !!! Requires ParameterSymbol::isOptional() !!!
-							.count();
-
-					// Add all valid argument counts from min to max (inclusive)
-					for (int i = minArgs; i <= maxArgs; i++)
-					{
-						expectedArities.add(i);
+						if (!allValidParamNames.contains(argName))
+						{
+							String signatures = classSymbol.resolveMethods(methodName).stream()
+									.map(m -> m.getName() + m.getParameters().stream().map(p -> p.getType().getName() + " " + p.getName()).collect(Collectors.joining(", ", "(", ")")))
+									.collect(Collectors.joining(", "));
+							errorHandler.logError(callCtx.start, "Parameter with name '" + argName + "' not found in any overload of '" + methodName + "'. Available signatures: " + signatures, currentClass);
+							return ErrorType.INSTANCE;
+						}
 					}
 				}
 
-				if (!expectedArities.isEmpty())
+				int argCount = positionalArgs.size() + namedArgs.size();
+				String errorMsg = "No viable overload for method '" + methodName + "' takes " + argCount + " arguments.";
+				List<MethodSymbol> allOverloads = classSymbol.resolveMethods(methodName);
+
+				if (!allOverloads.isEmpty())
 				{
-					// Format the arities nicely (e.g., 0, 1 or 2)
-					String formattedArities;
-					List<String> arityList = expectedArities.stream().map(String::valueOf).collect(Collectors.toList());
-
-					if (arityList.size() > 1)
+					Set<Integer> expectedArities = new TreeSet<>();
+					for (MethodSymbol m : allOverloads)
 					{
-						String last = arityList.remove(arityList.size() - 1);
-						formattedArities = String.join(", ", arityList) + " or " + last;
+						int maxArgs = m.getParameters().size();
+						int minArgs = (int) m.getParameters().stream().filter(p -> !p.hasDefaultValue()).count();
+						for (int i = minArgs; i <= maxArgs; i++)
+						{
+							expectedArities.add(i);
+						}
 					}
-					else
+					if (!expectedArities.isEmpty())
 					{
-						formattedArities = arityList.get(0);
+						String formattedArities;
+						List<String> arityList = expectedArities.stream().map(String::valueOf).collect(Collectors.toList());
+						if (arityList.size() > 1)
+						{
+							String last = arityList.remove(arityList.size() - 1);
+							formattedArities = String.join(", ", arityList) + " or " + last;
+						}
+						else
+						{
+							formattedArities = arityList.get(0);
+						}
+						errorMsg += " Expected argument counts are: " + formattedArities + ".";
 					}
-
-					errorMsg += " Expected argument counts are: " + formattedArities + ".";
 				}
+				errorHandler.logError(callCtx.start, errorMsg, currentClass);
+
 			}
-
-			logError(callCtx.start, errorMsg);
-			return ErrorType.INSTANCE;
-
-			// --- END OF NEW ERROR CHECKING LOGIC ---
-		}
-
-		// If only one candidate matches structurally, it must be the one.
-		// Type checking of its arguments will happen at the end.
-		if (candidates.size() == 1)
-		{
-			MethodSymbol resolvedMethod = candidates.get(0);
-			note(callCtx, resolvedMethod);
-			typeCheckArguments(resolvedMethod, positionalArgs, namedArgs);
-			return resolvedMethod.getType();
-		}
-
-		// 3. Phase 2: Disambiguation using context (Expected Return Type)
-		// If the call context expects a certain return type, we prefer overloads that match it.
-		List<MethodSymbol> finalCandidates = new ArrayList<>(candidates);
-		if (expectedType != null && expectedType != PrimitiveType.VOID && !(expectedType instanceof ErrorType))
-		{
-			List<MethodSymbol> matchesByReturn = new ArrayList<>();
-			for (MethodSymbol m : candidates)
+			else
 			{
-				if (m.getType().isAssignableTo(expectedType))
-				{
-					matchesByReturn.add(m);
-				}
+				String candidatesStr = viableCandidates.stream()
+						.map(m -> m.getName() + m.getParameters().stream()
+								.map(p -> p.getType().getName() + " " + p.getName())
+								.collect(Collectors.joining(", ", "(", ")")) + " -> " + m.getType().getName())
+						.collect(Collectors.joining("\n  "));
+				errorHandler.logError(callCtx.start, "Ambiguous method call or no overload matches argument types. Potential candidates based on argument structure:\n  " + candidatesStr, currentClass);
 			}
-			// If filtering by return type yields a smaller, non-empty set of candidates, use that set.
-			if (!matchesByReturn.isEmpty())
-			{
-				finalCandidates = matchesByReturn;
-			}
-		}
 
-		// After filtering, check again.
-		if (finalCandidates.size() == 1)
-		{
-			MethodSymbol resolvedMethod = finalCandidates.get(0);
-			note(callCtx, resolvedMethod);
-			typeCheckArguments(resolvedMethod, positionalArgs, namedArgs);
-			return resolvedMethod.getType();
-		}
-
-		// 4. Phase 3: Disambiguation by Argument Specificity (Tie-breaker)
-		// This is necessary for calls like `getPi(1)`, where both `getPi(int)` and `getPi(double)` are viable.
-		// We need to "score" how well the arguments fit each remaining candidate.
-		MethodSymbol bestMatch = null;
-		int minCost = Integer.MAX_VALUE;
-		boolean isAmbiguous = false;
-
-		for (MethodSymbol candidate : finalCandidates)
-		{
-			int currentCost = calculateArgumentMatchCost(candidate, positionalArgs, namedArgs);
-			if (currentCost < minCost)
-			{
-				minCost = currentCost;
-				bestMatch = candidate;
-				isAmbiguous = false;
-			}
-			else if (currentCost == minCost)
-			{
-				isAmbiguous = true;
-			}
-		}
-
-		if (isAmbiguous || bestMatch == null)
-		{
-			String candidatesStr = finalCandidates.stream().map(m -> m.getName() + m.getParameters().stream().map(p -> p.getType().getName() + " " + p.getName()).collect(Collectors.joining(", ", "(", ")")) + " -> " + m.getType().getName()).collect(Collectors.joining("\n  "));
-			logError(callCtx.start, "Ambiguous method call. The following overloads of '" + methodName + "' are all equally viable:\n  " + candidatesStr);
 			return ErrorType.INSTANCE;
 		}
 
-		// 5. We have a winner. Note it and perform final type-checking to ensure AST is annotated correctly.
+		MethodSymbol bestMatch = resolvedMethodOpt.get();
 		note(callCtx, bestMatch);
 		typeCheckArguments(bestMatch, positionalArgs, namedArgs);
 		return bestMatch.getType();
@@ -608,6 +533,96 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	// --- Statements ---
+	@Override
+	public Type visitStatement(NebulaParser.StatementContext ctx)
+	{
+		// 1. Handle statements that are just expressions (like Console.println(...) )
+		if (ctx.statementExpression() != null)
+		{
+			// This explicitly calls your overridden visitStatementExpression method.
+			// This is the missing link in the chain.
+			return visit(ctx.statementExpression());
+		}
+
+		// 2. Handle 'return' statements
+		if (ctx.returnStatement() != null)
+		{
+			return visit(ctx.returnStatement());
+		}
+
+		// 3. Handle 'if', 'while', 'for' blocks
+		// NOTE: You must also ensure that other compound statements (like 'if' or 'while')
+		// correctly call 'visit' on their statement/block children.
+
+		// Fallback: Use the default mechanism for other statement types (like blocks, etc.)
+		return visitChildren(ctx);
+	}
+
+	@Override
+	public Type visitStatementExpression(NebulaParser.StatementExpressionContext ctx)
+	{
+
+		// Detect a method call pattern like: postfix(...)
+
+		// Check if the context has enough children AND if the second child is the '(' terminal token.
+		boolean isMethodCall = ctx.postfixExpression() != null
+				&& ctx.getChildCount() >= 2
+				&& ctx.getChild(1) instanceof TerminalNode
+				&& ((TerminalNode) ctx.getChild(1)).getSymbol().getType() == NebulaLexer.L_PAREN_SYM; // Assuming NebulaLexer is available
+
+		System.out.println("================================VISITING STATEMENT EXPRESSION: " + ctx.getText() + " Is method call: " + isMethodCall);
+
+		if (isMethodCall) // Replace the old buggy condition
+		{
+			// Visit the left part (e.g., Console.println) to resolve it as a potential method group
+			visit(ctx.postfixExpression());
+			Symbol methodGroupSymbol = resolvedSymbols.get(ctx.postfixExpression());
+
+			if (methodGroupSymbol instanceof MethodSymbol)
+			{
+				Scope enclosingScope = ((MethodSymbol) methodGroupSymbol).getEnclosingScope();
+
+				if (enclosingScope instanceof ClassSymbol classOfMethod)
+				{
+					String methodName = methodGroupSymbol.getName();
+
+					// Extract arguments
+					List<NebulaParser.ExpressionContext> positionalArgs = new ArrayList<>();
+					Map<String, NebulaParser.ExpressionContext> namedArgs = new HashMap<>();
+
+					if (ctx.argumentList() != null)
+					{
+						// assuming grammar only supports positional args for now
+						positionalArgs.addAll(ctx.argumentList().expression());
+					}
+
+					// Use your full overload resolver
+					Optional<MethodSymbol> resolvedMethodOpt = classOfMethod.resolveOverload(this, methodName, positionalArgs, namedArgs);
+
+					if (resolvedMethodOpt.isPresent())
+					{
+						MethodSymbol resolvedMethod = resolvedMethodOpt.get();
+
+						// ✅ Symbol recording now reached
+						note(ctx, resolvedMethod);
+						System.out.println("NOTE: recorded for interval " + ctx.getSourceInterval() + " text=" + ctx.getText());
+
+						note(ctx, resolvedMethod.getType());
+
+						return resolvedMethod.getType();
+					}
+					else
+					{
+						System.out.println("Error, didnt run note(ctx, resolvedMethod); cause it wasnt reached, which means that resolvedMethodOpt.isPresent() == false");
+					}
+				}
+			}
+		}
+
+		// fallback for other statement expressions
+		return visitChildren(ctx);
+	}
+
 	@Override
 	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
 	{
@@ -1052,15 +1067,12 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		Type currentType = visit(ctx.primary());
 		Symbol currentSymbol = resolvedSymbols.get(ctx.primary());
 
-		// --- Bare type-name check (fixed logic) ---
 		boolean primaryIsTypeName = false;
 
-		// Case 1: grammar-level primitive type literal (e.g. "int", "uint")
 		if (ctx.primary() != null && ctx.primary().primitiveType() != null)
 		{
 			primaryIsTypeName = true;
 		}
-		// Case 2: resolved symbol is itself a type (class/struct/namespace)
 		else if (currentSymbol != null)
 		{
 			if (currentSymbol instanceof ClassSymbol ||
@@ -1079,14 +1091,12 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 
-		// If it’s just a bare type-name with no postfixes, that’s an error
 		if (primaryIsTypeName && ctx.getChildCount() == 1)
 		{
-			logError(ctx.start, "Expected an expression that evaluates to a value, but found a bare type name '" + currentType.getName() + "'.");
+			errorHandler.logError(ctx.start, "Expected an expression that evaluates to a value, but found a bare type name '" + currentType.getName() + "'.", currentClass);
 			return ErrorType.INSTANCE;
 		}
 
-		// --- Process postfix operations (.member, (), etc.) ---
 		int i = 1;
 		while (i < ctx.getChildCount())
 		{
@@ -1099,77 +1109,105 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 			if (operator.getText().equals("."))
 			{
-				i++; // Move to member identifier
+				i++;
 				if (i >= ctx.getChildCount())
+				{
 					break;
+				}
 
 				String memberName = ctx.getChild(i).getText();
-				Scope scopeToSearch = currentType.getClassSymbol(); // Works for ClassType, StructType, PrimitiveType
+				Scope scopeToSearch = currentType.getClassSymbol();
 
 				if (scopeToSearch == null)
 				{
 					if (currentType instanceof NamespaceType)
+					{
 						scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
+					}
 					else if (currentType instanceof TupleType)
+					{
 						scopeToSearch = (TupleType) currentType;
+					}
 				}
 
 				if (scopeToSearch == null)
 				{
-					logError(ctx.start, "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'.");
+					errorHandler.logError(ctx.start, "Cannot access member '" + memberName + "' on type '" + currentType.getName() + "'.", currentClass);
 					return ErrorType.INSTANCE;
 				}
 
 				Optional<Symbol> memberOpt = scopeToSearch.resolve(memberName);
 				if (memberOpt.isEmpty())
 				{
-					logError(((TerminalNode) ctx.getChild(i)).getSymbol(), "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.");
+					errorHandler.logError(((TerminalNode) ctx.getChild(i)).getSymbol(), "Cannot resolve member '" + memberName + "' in type '" + scopeToSearch.getName() + "'.", currentClass);
 					return ErrorType.INSTANCE;
 				}
 
 				currentSymbol = memberOpt.get();
 				if (currentSymbol instanceof AliasSymbol)
+				{
 					currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
+				}
+
+				if (currentSymbol instanceof MethodSymbol)
+				{
+					note(ctx, currentSymbol); // <--- ADD THIS LINE TO RECORD THE METHOD GROUP
+				}
 
 				currentType = currentSymbol.getType();
 			}
 			else if (operator.getText().equals("("))
 			{
-				// Method call
 				if (!(currentSymbol instanceof MethodSymbol))
 				{
-					logError(ctx.start, "'" + currentSymbol.getName() + "' is not a method and cannot be called.");
+					errorHandler.logError(ctx.start, "'" + currentSymbol.getName() + "' is not a method and cannot be called.", currentClass);
 					return ErrorType.INSTANCE;
 				}
 
 				Scope enclosingScope = ((Scope) currentSymbol).getEnclosingScope();
 				if (!(enclosingScope instanceof ClassSymbol))
 				{
-					logError(ctx.start, "Internal error: Method '" + currentSymbol.getName() + "' is not a member of a class.");
+					errorHandler.logError(ctx.start, "Internal error: Method '" + currentSymbol.getName() + "' is not a member of a class.", currentClass);
 					return ErrorType.INSTANCE;
 				}
 
 				ClassSymbol classOfMethod = (ClassSymbol) enclosingScope;
 				String methodName = currentSymbol.getName();
 
-				i++; // Move past '('
+				i++;
 				NebulaParser.ArgumentListContext argListCtx = null;
 				if (i < ctx.getChildCount() && ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
 				{
 					argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
-					i++; // Consume argument list
+					i++;
 				}
 
-				currentType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
-				currentSymbol = null; // Result of a call is a value, not a symbol
+				// Call visitMethodCall (which already notes internally)
+				Type callType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
+
+				List<NebulaParser.ExpressionContext> args = new ArrayList<>();
+				if (argListCtx != null && argListCtx.expression() != null)
+				{
+					args.addAll(argListCtx.expression());
+				}
+
+				Optional<MethodSymbol> resolvedMethodOpt = classOfMethod.resolveOverload(this, methodName, args, Map.of());
+
+
+				resolvedMethodOpt.ifPresent(method ->
+				{
+					note(ctx, method);
+					System.out.println("NOTE: recorded for interval " + ctx.getSourceInterval() + " text=" + ctx.getText() + " -> " + method.getName());
+				});
+
+				currentType = callType;
+				currentSymbol = resolvedMethodOpt.orElse(null);
 			}
 
-			i++; // Move to next operator
+			i++;
 		}
 
 		note(ctx, currentType);
-		if (currentSymbol != null)
-			note(ctx, currentSymbol);
 
 		return currentType;
 	}
@@ -1600,52 +1638,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	/**
-	 * A helper to calculate a numeric "cost" for how well a method's parameters
-	 * match the provided arguments. Lower is better.
-	 * Cost is calculated as:
-	 * - 0 for an exact type match.
-	 * - 1 for a match requiring a widening conversion.
-	 * - Infinity if a conversion is not possible.
-	 */
-	private int calculateArgumentMatchCost(MethodSymbol candidate, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
-	{
-		int totalCost = 0;
-		List<ParameterSymbol> params = candidate.getParameters();
-
-		// Check positional arguments
-		for (int i = 0; i < positionalArgs.size(); i++)
-		{
-			Type paramType = params.get(i).getType();
-			Type argType = visitExpecting(positionalArgs.get(i), paramType); // This visit is for type inference
-			if (!argType.isAssignableTo(paramType))
-			{
-				return Integer.MAX_VALUE; // Not a viable candidate
-			}
-			if (!argType.equals(paramType))
-			{
-				totalCost++; // Add cost for implicit conversion
-			}
-		}
-
-		// Check named arguments
-		for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
-		{
-			Optional<ParameterSymbol> paramOpt = params.stream().filter(p -> p.getName().equals(entry.getKey())).findFirst();
-			Type paramType = paramOpt.get().getType();
-			Type argType = visitExpecting(entry.getValue(), paramType);
-			if (!argType.isAssignableTo(paramType))
-			{
-				return Integer.MAX_VALUE; // Not a viable candidate
-			}
-			if (!argType.equals(paramType))
-			{
-				totalCost++;
-			}
-		}
-		return totalCost;
-	}
-
-	/**
 	 * Performs the final type-check for each argument against the chosen method's parameters.
 	 * This is done after resolution to ensure the correct `visitExpecting` calls are made and
 	 * the AST is annotated correctly for the single resolved overload.
@@ -1812,4 +1804,80 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return targetType;
 	}
 
+	/**
+	 * A helper to calculate a numeric "cost" for how well a method's parameters
+	 * match the provided arguments. Lower is better.
+	 * Cost is calculated as:
+	 * - 0 for an exact type match.
+	 * - 1 for a match requiring a widening conversion.
+	 * - Infinity if a conversion is not possible.
+	 */
+	public int calculateArgumentMatchCost(MethodSymbol candidate, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
+	{
+		int totalCost = 0;
+		List<ParameterSymbol> params = candidate.getParameters();
+
+		for (int i = 0; i < positionalArgs.size(); i++)
+		{
+			Type paramType = params.get(i).getType();
+			Type argType = visitExpecting(positionalArgs.get(i), paramType);
+			if (!argType.isAssignableTo(paramType))
+			{
+				return Integer.MAX_VALUE;
+			}
+			if (!argType.equals(paramType))
+			{
+				totalCost++;
+			}
+		}
+
+		for (Map.Entry<String, NebulaParser.ExpressionContext> entry : namedArgs.entrySet())
+		{
+			Optional<ParameterSymbol> paramOpt = params.stream().filter(p -> p.getName().equals(entry.getKey())).findFirst();
+			Type paramType = paramOpt.get().getType();
+			Type argType = visitExpecting(entry.getValue(), paramType);
+			if (!argType.isAssignableTo(paramType))
+			{
+				return Integer.MAX_VALUE;
+			}
+			if (!argType.equals(paramType))
+			{
+				totalCost++;
+			}
+		}
+		return totalCost;
+	}
+
+	public boolean areArgumentsAssignableTo(MethodSymbol m, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
+	{
+		List<ParameterSymbol> params = m.getParameters();
+
+		for (int i = 0; i < positionalArgs.size(); i++)
+		{
+			Type argType = visit(positionalArgs.get(i));
+			Type paramType = params.get(i).getType();
+			if (!argType.isAssignableTo(paramType))
+			{
+				return false;
+			}
+		}
+
+		for (Map.Entry<String, NebulaParser.ExpressionContext> e : namedArgs.entrySet())
+		{
+			ParameterSymbol p = params.stream()
+					.filter(pp -> pp.getName().equals(e.getKey()))
+					.findFirst().orElse(null);
+			if (p == null)
+			{
+				return false;
+			}
+
+			Type argType = visit(e.getValue());
+			if (!argType.isAssignableTo(p.getType()))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
 }
