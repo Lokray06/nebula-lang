@@ -83,4 +83,28 @@ public class MethodSymbol extends Scope implements Symbol
 	{
 		return isNative;
 	}
+
+    @Override
+    public String toString()
+    {
+        String returnType = this.getType().getName();
+        String methodName = this.getName();
+        String parameterTypes = "";
+
+        int i = 0;
+        for (ParameterSymbol param : this.getParameters())
+        {
+            parameterTypes += param.getType().getName() + " " + param.getName();
+
+            // Isn't last parameter
+            if(!(i == this.getParameters().size() - 1))
+            {
+                parameterTypes += ", ";
+            }
+            i++;
+        }
+
+
+        return returnType + " " + methodName + "(" + parameterTypes + "){...};";
+    }
 }

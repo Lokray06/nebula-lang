@@ -77,9 +77,8 @@ public class SemanticAnalyzer
 			{
 				for (MethodSymbol method : overloads)
 				{
-					Debug.logDebug("        - Method: " + method.getName()
-							+ " (" + method.getParameterTypes().size() + " parameters, returns "
-							+ method.getType().getName() + ")");
+
+					Debug.logDebug("        - Method: " + method);
 				}
 			}
 		}
