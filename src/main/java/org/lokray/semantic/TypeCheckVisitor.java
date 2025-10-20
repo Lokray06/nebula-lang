@@ -1163,14 +1163,20 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type> {
             return ErrorType.INSTANCE;
         }
 
+        // --- START FIX ---
+        // Check for allowed casts
+        boolean isSameType = originalType.equals(targetType) || PrimitiveType.areEquivalent(originalType, targetType);
         boolean isNumericCast = originalType.isNumeric() && targetType.isNumeric();
+        // Assuming you have isReferenceType() on your Type interface
         boolean isReferenceCast = originalType.isReferenceType() && targetType.isReferenceType();
 
-        if (!isNumericCast && !isReferenceCast) {
+        // UPDATED CHECK: Allow if same type, OR numeric cast, OR reference cast
+        if (!isSameType && !isNumericCast && !isReferenceCast) {
             logError(ctx.start, "Cannot cast from '" + originalType.getName() + "' to '" + targetType.getName() + "'.");
             note(ctx, ErrorType.INSTANCE);
             return ErrorType.INSTANCE;
         }
+        // --- END FIX ---
 
         // The type of the entire cast expression is the target type.
         note(ctx, targetType);
