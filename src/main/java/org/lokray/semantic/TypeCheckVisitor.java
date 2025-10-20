@@ -490,6 +490,8 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type> {
             visit(ctx.postfixExpression());
             Symbol methodGroupSymbol = resolvedSymbols.get(ctx.postfixExpression());
 
+            Debug.logDebug(methodGroupSymbol.getName());
+
             if (!(methodGroupSymbol instanceof MethodSymbol)) {
                 // This should ideally be caught by visitPostfixExpression, but good to check
                 logError(ctx.start, "'" + ctx.postfixExpression().getText() + "' is not a method.");
@@ -1012,6 +1014,15 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type> {
 
             i++;
         }
+
+        // --- START FIX ---
+        // Store the final resolved symbol against the *entire* postfix expression node.
+        // This is crucial so that parent visitors (like visitStatementExpression)
+        // can retrieve the symbol from *this* node.
+        if (currentSymbol != null) {
+            note(ctx, currentSymbol);
+        }
+        // --- END FIX ---
 
         note(ctx, currentType);
 
