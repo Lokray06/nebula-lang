@@ -164,7 +164,7 @@ public class PrimitiveType implements Type {
         if (this.equals(other)) {
             return true;
         }
-o
+
         // --- START FIX ---
         // Allow any primitive (except void) to be "boxed" or assigned to Object
         if (other.isReferenceType() && other.getName().equals("Object")) {
