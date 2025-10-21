@@ -18,9 +18,10 @@ public class SemanticAnalyzer
 {
 	private final Scope globalScope = new Scope(null);
 	private boolean hasErrors = false;
-	private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
-	private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
 	private final Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
+	private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
+	private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
+	private final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
 	private final ErrorHandler errorHandler;
 
 	public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
@@ -92,7 +93,7 @@ public class SemanticAnalyzer
 
 		// Pass 3: Type Checking and Resolution for method bodies and initializers
 		Debug.logDebug("\nType checking...");
-		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, errorHandler);
+		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, resolvedInfo, errorHandler); // Pass resolvedInfo map
 		refVisitor.visit(tree);
 		this.hasErrors = refVisitor.hasErrors();
 
@@ -278,6 +279,43 @@ public class SemanticAnalyzer
 			if (kint != null && kint.equals(target))
 			{
 				return Optional.ofNullable(resolvedTypes.get(key));
+			}
+		}
+		return Optional.empty();
+	}
+
+	public Optional<Object> getResolvedInfo(ParseTree node)
+	{
+		for (ParseTree k : resolvedInfo.keySet())
+		{
+			System.out.println("resolvedInfo key: " + k.getClass().getSimpleName() + " -> interval=" + k.getSourceInterval() + " text=" + k.getText());
+		}
+
+		if (node == null)
+		{
+			return Optional.empty();
+		}
+
+
+		Object o = resolvedInfo.get(node);
+		if (o != null)
+		{
+			return Optional.of(o);
+		}
+
+		// fallback by source interval (matches what you already do for symbols/types)
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{
+			return Optional.empty();
+		}
+
+		for (ParseTree key : resolvedInfo.keySet())
+		{
+			Interval kint = key.getSourceInterval();
+			if (kint != null && kint.equals(target))
+			{
+				return Optional.ofNullable(resolvedInfo.get(key));
 			}
 		}
 		return Optional.empty();

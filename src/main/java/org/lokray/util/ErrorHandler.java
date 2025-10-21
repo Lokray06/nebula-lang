@@ -21,4 +21,9 @@ public class ErrorHandler
 	{
 		return hasErrors;
 	}
+
+	public void setHasErrors(boolean hasErrors)
+	{
+		this.hasErrors = hasErrors;
+	}
 }

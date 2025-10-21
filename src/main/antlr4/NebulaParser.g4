@@ -270,8 +270,8 @@ ifStatement
     ;
 
 forStatement
-    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM statement     // SimplifiedFor
-    | FOR_KW L_PAREN_SYM (variableDeclaration | expression)? SEMI_SYM expression? SEMI_SYM expression? R_PAREN_SYM statement
+    : FOR_KW L_PAREN_SYM simplifiedForClause R_PAREN_SYM block     // SimplifiedFor
+    | FOR_KW L_PAREN_SYM (variableDeclaration | expression)? SEMI_SYM expression? SEMI_SYM expression? R_PAREN_SYM block
                                                                     // TraditionalFor
     ;
 

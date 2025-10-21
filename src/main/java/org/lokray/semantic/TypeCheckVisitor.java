@@ -7,12 +7,14 @@ import org.antlr.v4.runtime.tree.TerminalNode;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.parser.NebulaParserBaseVisitor;
+import org.lokray.semantic.info.SimplifiedForInfo;
+import org.lokray.semantic.info.TraditionalForInfo;
 import org.lokray.semantic.symbol.*;
-import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.type.*;
 import org.lokray.util.Debug;
 import org.lokray.util.ErrorHandler;
 
+import java.math.BigInteger;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -32,14 +34,16 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	private final Map<String, ClassSymbol> declaredClasses;
 	private final Map<ParseTree, Symbol> resolvedSymbols;
 	private final Map<ParseTree, Type> resolvedTypes;
+	private final Map<ParseTree, Object> resolvedInfo;
 
-	public TypeCheckVisitor(Scope globalScope, Map<String, ClassSymbol> declaredClasses, Map<ParseTree, Symbol> symbols, Map<ParseTree, Type> types, ErrorHandler errorhandler)
+	public TypeCheckVisitor(Scope globalScope, Map<String, ClassSymbol> declaredClasses, Map<ParseTree, Symbol> symbols, Map<ParseTree, Type> types, Map<ParseTree, Object> resolvedInfo, ErrorHandler errorhandler)
 	{
 		this.globalScope = globalScope;
 		this.currentScope = globalScope;
 		this.declaredClasses = declaredClasses;
 		this.resolvedSymbols = symbols;
 		this.resolvedTypes = types;
+		this.resolvedInfo = resolvedInfo; // Store the map
 		this.errorHandler = errorhandler;
 	}
 
@@ -50,7 +54,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 	private void logError(org.antlr.v4.runtime.Token token, String msg)
 	{
-		// New Format: [Semantic Error] current class name - line:char - msg
 		// Get the current class name or an empty string if not inside a class
 		String className = currentClass != null ? currentClass.getName() : "";
 
@@ -58,7 +61,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		String err = String.format("[Semantic Error] %s - line %d:%d - %s", className, token.getLine(), token.getCharPositionInLine() + 1, msg);
 
 		Debug.logError(err);
-		//errorHandler. = true;
+		errorHandler.setHasErrors(true);
 	}
 
 	private void note(ParseTree ctx, Symbol symbol)
@@ -74,6 +77,14 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		if (ctx != null)
 		{
 			resolvedTypes.put(ctx, type);
+		}
+	}
+
+	private void noteInfo(ParseTree ctx, Object info)
+	{
+		if (ctx != null && info != null)
+		{
+			resolvedInfo.put(ctx, info);
 		}
 	}
 
@@ -532,38 +543,29 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return PrimitiveType.VOID;
 	}
 
-	// --- Statements ---
 	@Override
 	public Type visitStatement(NebulaParser.StatementContext ctx)
 	{
-		// 1. Handle statements that are just expressions (like Console.println(...) )
+		System.out.println("VISIT STATEMENT -> hasExpr=" + (ctx.statementExpression() != null)
+				+ " hasReturn=" + (ctx.returnStatement() != null)
+				+ " hasFor=" + (ctx.forStatement() != null)
+				+ " childCount=" + ctx.getChildCount());
+
+		// then same body as before but keep it unchanged for diagnosis
 		if (ctx.statementExpression() != null)
 		{
-			// This explicitly calls your overridden visitStatementExpression method.
-			// This is the missing link in the chain.
 			return visit(ctx.statementExpression());
 		}
-
-		// 2. Handle 'return' statements
 		if (ctx.returnStatement() != null)
 		{
 			return visit(ctx.returnStatement());
 		}
-
-		// 3. Handle 'if', 'while', 'for' blocks
-		// NOTE: You must also ensure that other compound statements (like 'if' or 'while')
-		// correctly call 'visit' on their statement/block children.
-
-		// Fallback: Use the default mechanism for other statement types (like blocks, etc.)
-		return visitChildren(ctx);
+		return (Type) super.visitChildren(ctx);
 	}
 
 	@Override
 	public Type visitStatementExpression(NebulaParser.StatementExpressionContext ctx)
 	{
-
-		// Detect a method call pattern like: postfix(...)
-
 		// Check if the context has enough children AND if the second child is the '(' terminal token.
 		boolean isMethodCall = ctx.postfixExpression() != null
 				&& ctx.getChildCount() >= 2
@@ -748,82 +750,132 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitForStatement(NebulaParser.ForStatementContext ctx)
 	{
-		Scope forScope = new Scope(currentScope);
-		currentScope = forScope;
+		System.out.println("VISITING FOR STATEMENT"); // [cite: 2550]
+		Scope forScope = new Scope(currentScope); // [cite: 2550]
+		currentScope = forScope; // [cite: 2550]
 
 		if (ctx.simplifiedForClause() != null)
-		{
-			NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause();
-			String varName = simplifiedCtx.ID().getText();
+		{ // [cite: 2550]
+			NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause(); // [cite: 2550]
+			String varName = simplifiedCtx.ID().getText(); // [cite: 2550]
 
-			// The loop variable is implicitly an integer. Let's use 'int' as the default.
-			Type intType = globalScope.resolve("int").orElseThrow().getType();
+			// --- 1. Define expressions and default types ---
+			Type defaultIntType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE); // [cite: 2550]
 
-			VariableSymbol loopVar = new VariableSymbol(varName, intType, false, true, false);
-			currentScope.define(loopVar);
-			note(simplifiedCtx.ID(), loopVar);
-			note(simplifiedCtx.ID(), intType);
+			NebulaParser.ExpressionContext startExprCtx = null; // [cite: 2551]
+			NebulaParser.ExpressionContext limitExprCtx; // [cite: 2551]
+			NebulaParser.RelationalOperatorContext operator = simplifiedCtx.relationalOperator(); // [cite: 2551]
 
-			for (NebulaParser.ExpressionContext exprCtx : simplifiedCtx.expression())
-			{
-				Type exprType = visit(exprCtx);
-				// Allow any integer type (int, long, etc.), not just 'int'.
-				if (!exprType.isInteger())
-				{
-					logError(exprCtx.start, "Incompatible types in for loop clause: expected an integer expression, but found '" + exprType.getName() + "'.");
+			if (simplifiedCtx.expression().size() == 2)
+			{ // for(i = start op limit) [cite: 2551]
+				startExprCtx = simplifiedCtx.expression(0); // [cite: 2551]
+				limitExprCtx = simplifiedCtx.expression(1); // [cite: 2551]
+				Type startType = visit(startExprCtx); // Type check start [cite: 2551]
+				if (!startType.isInteger())
+				{ // [cite: 2551]
+					logError(((ParserRuleContext) startExprCtx).getStart(), "Incompatible types in for loop initializer: expected an integer expression, but found '" + startType.getName() + "'."); // [cite: 2552]
 				}
 			}
+			else
+			{ // for(i op limit) [cite: 2552]
+				limitExprCtx = simplifiedCtx.expression(0); // [cite: 2552]
+			}
 
-			visit(ctx.statement());
+			// --- 2. Resolve Limit Type ---
+			Type limitType = visit(limitExprCtx); // Type check limit [cite: 2552]
 
+			if (!limitType.isInteger())
+			{ // [cite: 2552]
+				logError(((ParserRuleContext) limitExprCtx).getStart(), "Incompatible types in for loop limit: expected an integer expression, but found '" + limitType.getName() + "'."); // [cite: 2553]
+				// Fallback to default int type if the limit is not a valid integer type [cite: 2553]
+				limitType = defaultIntType; // [cite: 2553]
+			}
+
+			// --- FIX: Add Semantic Check for Implicit Start with > or >= ---
+			if (startExprCtx == null && (operator.GREATER_THAN_SYM() != null || operator.GREATER_EQUAL_THAN_SYM() != null))
+			{
+				logError(operator.start, "Simplified 'for' loop using '>' or '>=' requires an explicit start value (e.g., 'for (i = 10 > 0)'). Cannot implicitly count down from 0.");
+				// Treat as error for now, could potentially recover by setting loopVarType to ErrorType
+			}
+			// --- END FIX ---
+
+			// Set loop variable type directly from the limit type (if integer)
+			Type loopVarType = limitType; // [cite: 2553]
+
+			// Define the loop variable with the resolved type (e.g., int64)
+			VariableSymbol loopVar = new VariableSymbol(varName, loopVarType, false, true, false); //
+			currentScope.define(loopVar); //
+			note(simplifiedCtx.ID(), loopVar); //
+			note(simplifiedCtx.ID(), loopVarType); //
+
+			// Store the desugared info
+			SimplifiedForInfo info = new SimplifiedForInfo(loopVar, startExprCtx, limitExprCtx, operator); //
+			noteInfo(ctx, info); //
+
+			visit(ctx.block()); // Visit body
 		}
 		else
-		{ // Traditional for-loop
-			int expressionIndex = 0;
-			// Handle initializer
+		{
+			// --- Traditional For --- [cite: 2555]
+			// ... (existing traditional for loop logic remains the same) ... [cite: 2555-2558]
+			ParseTree initializer = null; // [cite: 2555]
+			NebulaParser.ExpressionContext conditionExprCtx = null; // [cite: 2555]
+			NebulaParser.ExpressionContext updateExprCtx = null; // [cite: 2555]
+			int expressionIndex = 0; // [cite: 2555]
+
+			// Handle initializer [cite: 2555]
 			if (ctx.variableDeclaration() != null)
-			{
-				visit(ctx.variableDeclaration());
+			{ // [cite: 2555]
+				initializer = ctx.variableDeclaration(); // [cite: 2555]
+				visit(initializer); // [cite: 2555]
 			}
-			else if (!ctx.expression().isEmpty() && ctx.SEMI_SYM(0) != null)
-			{
-				// Make sure we don't misinterpret the condition as the initializer
-				if (ctx.expression().get(0).getStart().getTokenIndex() < ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
-				{
-					visit(ctx.expression(expressionIndex++));
+			else if (ctx.expression() != null && !ctx.expression().isEmpty() && ctx.SEMI_SYM(0) != null)
+			{ // [cite: 2556]
+				if (ctx.expression(0).getStart().getTokenIndex() < ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
+				{ // [cite: 2556]
+					initializer = ctx.expression(expressionIndex++); // [cite: 2556]
+					visit(initializer); // [cite: 2556]
 				}
 			}
 
-			// Handle condition
+			// Handle condition [cite: 2556]
 			if (ctx.SEMI_SYM(0) != null && ctx.SEMI_SYM(1) != null)
-			{
+			{ // [cite: 2556]
 				if (ctx.expression().size() > expressionIndex)
-				{
-					if (ctx.expression().get(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
-					{
-						Type conditionType = visit(ctx.expression(expressionIndex++));
-						Type boolType = globalScope.resolve("bool").orElseThrow().getType();
+				{ // [cite: 2556]
+					if (ctx.expression(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
+					{ // [cite: 2556]
+						conditionExprCtx = ctx.expression(expressionIndex++); // [cite: 2557]
+						Type conditionType = visit(conditionExprCtx); // [cite: 2557]
+						Type boolType = globalScope.resolve("bool").map(Symbol::getType).orElse(ErrorType.INSTANCE); // [cite: 2557]
 						if (!conditionType.isAssignableTo(boolType))
-						{
-							logError(ctx.expression(expressionIndex - 1).start, "For loop condition must be of type 'bool', but found '" + conditionType.getName() + "'.");
+						{ // [cite: 2557]
+							logError(((ParserRuleContext) conditionExprCtx).getStart(), "For loop condition must be of type 'bool', but found '" + conditionType.getName() + "'."); // [cite: 2557]
 						}
 					}
 				}
 			}
 
-
-			// Handle update
+			// Handle update [cite: 2557]
 			if (ctx.expression().size() > expressionIndex)
-			{
-				visit(ctx.expression(expressionIndex));
+			{ // [cite: 2557]
+				if (ctx.SEMI_SYM(1) != null && ctx.expression(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(1).getSymbol().getTokenIndex())
+				{ // [cite: 2557]
+					updateExprCtx = ctx.expression(expressionIndex); // [cite: 2557]
+					visit(updateExprCtx); // [cite: 2558]
+				}
 			}
 
-			// Visit the loop body
-			visit(ctx.statement());
+			// Store the desugared info for the traditional loop [cite: 2558]
+			TraditionalForInfo info = new TraditionalForInfo(initializer, conditionExprCtx, updateExprCtx); // [cite: 2558]
+			noteInfo(ctx, info); // [cite: 2558]
+
+			visit(ctx.block()); // Visit body [cite: 2558]
+			System.out.println("SOMETHING'S VERY WRONG"); // [cite: 2558] This indicates an unexpected path, likely remove in final code.
 		}
 
-		currentScope = currentScope.getEnclosingScope();
-		return PrimitiveType.VOID;
+		currentScope = currentScope.getEnclosingScope(); // [cite: 2558]
+		return PrimitiveType.VOID; // [cite: 2558]
 	}
 
 	@Override
@@ -1532,23 +1584,11 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitLiteral(NebulaParser.LiteralContext ctx)
 	{
-		if (ctx.INTEGER_LITERAL() != null)
+		if (ctx.LONG_LITERAL() != null || ctx.INTEGER_LITERAL() != null || ctx.HEX_LITERAL() != null)
 		{
-			return PrimitiveType.INT32; // default for plain integers
-		}
-		if (ctx.LONG_LITERAL() != null)
-		{
-			return PrimitiveType.INT64; // long literal
-		}
-		if (ctx.HEX_LITERAL() != null)
-		{
-			// Check if it ends with L or l
-			String text = ctx.HEX_LITERAL().getText();
-			if (text.endsWith("L") || text.endsWith("l"))
-			{
-				return PrimitiveType.INT64;
-			}
-			return PrimitiveType.INT32;
+			resolveIntegerLiteralSemantics(ctx);
+			Type resolved = resolvedTypes.get(ctx);
+			return resolved != null ? resolved : ErrorType.INSTANCE;
 		}
 		if (ctx.FLOAT_LITERAL() != null)
 		{
@@ -1931,5 +1971,154 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 		return true;
+	}
+
+	private void resolveIntegerLiteralSemantics(NebulaParser.LiteralContext ctx)
+	{
+		String raw = null;
+		boolean hasLongSuffix = false;
+		boolean hasUnsignedSuffix = false;
+		int base = 10;
+
+		if (ctx.LONG_LITERAL() != null)
+		{
+			raw = ctx.LONG_LITERAL().getText(); // [cite: 2562]
+		}
+		else if (ctx.INTEGER_LITERAL() != null)
+		{
+			raw = ctx.INTEGER_LITERAL().getText(); // [cite: 2562]
+		}
+		else if (ctx.HEX_LITERAL() != null)
+		{
+			raw = ctx.HEX_LITERAL().getText(); // [cite: 2563]
+		}
+		else
+		{
+			return; // Not an integer-like literal
+		}
+
+		String originalText = raw; // For error messages
+
+		// --- NEW: Handle compound suffixes like 'ul' or 'Lu' ---
+		if (raw.endsWith("ul") || raw.endsWith("Ul") || raw.endsWith("uL") || raw.endsWith("UL") ||
+				raw.endsWith("lu") || raw.endsWith("Lu") || raw.endsWith("lU") || raw.endsWith("LU"))
+		{
+			hasLongSuffix = true;
+			hasUnsignedSuffix = true;
+			raw = raw.substring(0, raw.length() - 2);
+		}
+		else if (raw.endsWith("l") || raw.endsWith("L"))
+		{
+			hasLongSuffix = true;
+			raw = raw.substring(0, raw.length() - 1); // [cite: 2563]
+		}
+		else if (raw.endsWith("u") || raw.endsWith("U"))
+		{
+			hasUnsignedSuffix = true;
+			raw = raw.substring(0, raw.length() - 1);
+		}
+
+		if (raw.startsWith("0x") || raw.startsWith("0X"))
+		{
+			base = 16; // [cite: 2634]
+			raw = raw.substring(2); // [cite: 2634]
+		}
+		else if (raw.startsWith("0b") || raw.startsWith("0B"))
+		{
+			base = 2; // [cite: 2634]
+			raw = raw.substring(2); // [cite: 2634]
+		}
+
+		// *** FIX: Remove underscores before parsing ***
+		raw = raw.replace("_", "");
+
+		BigInteger bi = null;
+		try
+		{
+			bi = new BigInteger(raw, base); // [cite: 2634]
+		}
+		catch (NumberFormatException ex)
+		{
+			logError(ctx.start, "Malformed integer literal: " + originalText); // [cite: 2634]
+			note(ctx, ErrorType.INSTANCE);
+			return;
+		}
+
+		// --- NEW: Range Constants for Unsigned ---
+		BigInteger maxInt32 = BigInteger.valueOf(Integer.MAX_VALUE);
+		BigInteger minInt32 = BigInteger.valueOf(Integer.MIN_VALUE);
+		BigInteger maxUInt32 = new BigInteger("4294967295"); // 2^32 - 1
+		BigInteger maxInt64 = BigInteger.valueOf(Long.MAX_VALUE);
+		BigInteger minInt64 = BigInteger.valueOf(Long.MIN_VALUE);
+		// 2^64 - 1 (BigInteger constructor takes sign-magnitude, so this is correct)
+		BigInteger maxUInt64 = new BigInteger("18446744073709551615");
+		BigInteger zero = BigInteger.ZERO;
+
+		if (hasUnsignedSuffix)
+		{
+			if (hasLongSuffix)
+			{ // ULONG (uint64)
+				if (bi.compareTo(zero) < 0 || bi.compareTo(maxUInt64) > 0)
+				{
+					logError(ctx.start, "Unsigned long literal out of range: " + originalText);
+					note(ctx, ErrorType.INSTANCE);
+					return;
+				}
+				note(ctx, PrimitiveType.UINT64);
+				noteInfo(ctx, bi.longValue()); // Store as long bits
+			}
+			else
+			{ // UINT (uint32)
+				if (bi.compareTo(zero) < 0 || bi.compareTo(maxUInt32) > 0)
+				{
+					logError(ctx.start, "Unsigned int literal out of range: " + originalText);
+					note(ctx, ErrorType.INSTANCE);
+					return;
+				}
+				note(ctx, PrimitiveType.UINT32);
+				noteInfo(ctx, bi.intValue()); // Store as int bits
+			}
+		}
+		else if (hasLongSuffix)
+		{ // LONG (int64)
+			if (bi.compareTo(minInt64) < 0 || bi.compareTo(maxInt64) > 0)
+			{
+				logError(ctx.start, "Long literal out of range: " + originalText); // [cite: 2636]
+				note(ctx, ErrorType.INSTANCE);
+				return;
+			}
+			note(ctx, PrimitiveType.INT64); // [cite: 2636]
+			noteInfo(ctx, bi.longValue()); // [cite: 2637]
+		}
+		else
+		{ // No suffix: Try int32, then int64
+			if (bi.compareTo(minInt32) >= 0 && bi.compareTo(maxInt32) <= 0)
+			{
+				note(ctx, PrimitiveType.INT32); // [cite: 2637]
+				noteInfo(ctx, bi.intValue()); // [cite: 2637]
+			}
+			else if (bi.compareTo(minInt64) >= 0 && bi.compareTo(maxInt64) <= 0)
+			{
+				note(ctx, PrimitiveType.INT64); // [cite: 2638]
+				noteInfo(ctx, bi.longValue()); // [cite: 2638]
+			}
+			// --- NEW: Check for large positive numbers that fit in uint64 ---
+			// This allows `var x = 18446744073709551615;` to be inferred as uint64
+			// (This part is optional, depending on your language rules for unsuffixed literals)
+        /*
+        else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0) {
+            logError(ctx.start, "Integer literal is too large for 'int64'. Use 'ul' suffix for 'uint64': " + originalText);
+             // Or, if you want to be lenient:
+             // note(ctx, PrimitiveType.UINT64);
+             // noteInfo(ctx, bi.longValue());
+            note(ctx, ErrorType.INSTANCE);
+        }
+        */
+			else
+			{
+				logError(ctx.start, "Integer literal out of range: " + originalText); // [cite: 2638]
+				note(ctx, ErrorType.INSTANCE);
+			}
+		}
 	}
 }
