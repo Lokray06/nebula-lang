@@ -546,7 +546,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitStatement(NebulaParser.StatementContext ctx)
 	{
-		System.out.println("VISIT STATEMENT -> hasExpr=" + (ctx.statementExpression() != null)
+		Debug.logDebug("VISIT STATEMENT -> hasExpr=" + (ctx.statementExpression() != null)
 				+ " hasReturn=" + (ctx.returnStatement() != null)
 				+ " hasFor=" + (ctx.forStatement() != null)
 				+ " childCount=" + ctx.getChildCount());
@@ -628,8 +628,11 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
 	{
+		System.out.println("=========================== VISITING VARIABLE DECLARATION FOR: " + ctx.getText() + " IN THE TYPE CHECKER");
+
 		// inside visitVariableDeclaration
 		Type declaredType = resolveType(ctx.type());
+		note(ctx.type(), declaredType); // This is what the IR Visitor is expecting.
 		Type sharedInitializerType = null;
 
 // Get type of last declarator’s expression (if any)
@@ -750,7 +753,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitForStatement(NebulaParser.ForStatementContext ctx)
 	{
-		System.out.println("VISITING FOR STATEMENT"); // [cite: 2550]
 		Scope forScope = new Scope(currentScope); // [cite: 2550]
 		currentScope = forScope; // [cite: 2550]
 
@@ -1977,20 +1979,20 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	{
 		String raw = null;
 		boolean hasLongSuffix = false;
-		boolean hasUnsignedSuffix = false;
+		boolean hasUnsignedSuffix = false; // Added
 		int base = 10;
 
 		if (ctx.LONG_LITERAL() != null)
 		{
-			raw = ctx.LONG_LITERAL().getText(); // [cite: 2562]
+			raw = ctx.LONG_LITERAL().getText();
 		}
 		else if (ctx.INTEGER_LITERAL() != null)
 		{
-			raw = ctx.INTEGER_LITERAL().getText(); // [cite: 2562]
+			raw = ctx.INTEGER_LITERAL().getText();
 		}
 		else if (ctx.HEX_LITERAL() != null)
 		{
-			raw = ctx.HEX_LITERAL().getText(); // [cite: 2563]
+			raw = ctx.HEX_LITERAL().getText();
 		}
 		else
 		{
@@ -1999,7 +2001,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 		String originalText = raw; // For error messages
 
-		// --- NEW: Handle compound suffixes like 'ul' or 'Lu' ---
+		// Handle compound suffixes like 'ul' or 'Lu'
 		if (raw.endsWith("ul") || raw.endsWith("Ul") || raw.endsWith("uL") || raw.endsWith("UL") ||
 				raw.endsWith("lu") || raw.endsWith("Lu") || raw.endsWith("lU") || raw.endsWith("LU"))
 		{
@@ -2010,41 +2012,42 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		else if (raw.endsWith("l") || raw.endsWith("L"))
 		{
 			hasLongSuffix = true;
-			raw = raw.substring(0, raw.length() - 1); // [cite: 2563]
+			raw = raw.substring(0, raw.length() - 1);
 		}
-		else if (raw.endsWith("u") || raw.endsWith("U"))
+		else if (raw.endsWith("u") || raw.endsWith("U")) // Check for 'u' AFTER 'ul'/'lu'
 		{
 			hasUnsignedSuffix = true;
 			raw = raw.substring(0, raw.length() - 1);
 		}
 
+
 		if (raw.startsWith("0x") || raw.startsWith("0X"))
 		{
-			base = 16; // [cite: 2634]
-			raw = raw.substring(2); // [cite: 2634]
+			base = 16;
+			raw = raw.substring(2);
 		}
 		else if (raw.startsWith("0b") || raw.startsWith("0B"))
 		{
-			base = 2; // [cite: 2634]
-			raw = raw.substring(2); // [cite: 2634]
+			base = 2;
+			raw = raw.substring(2);
 		}
 
-		// *** FIX: Remove underscores before parsing ***
+		// Remove underscores before parsing
 		raw = raw.replace("_", "");
 
 		BigInteger bi = null;
 		try
 		{
-			bi = new BigInteger(raw, base); // [cite: 2634]
+			bi = new BigInteger(raw, base);
 		}
 		catch (NumberFormatException ex)
 		{
-			logError(ctx.start, "Malformed integer literal: " + originalText); // [cite: 2634]
+			logError(ctx.start, "Malformed integer literal: " + originalText);
 			note(ctx, ErrorType.INSTANCE);
 			return;
 		}
 
-		// --- NEW: Range Constants for Unsigned ---
+		// Range Constants for Unsigned
 		BigInteger maxInt32 = BigInteger.valueOf(Integer.MAX_VALUE);
 		BigInteger minInt32 = BigInteger.valueOf(Integer.MIN_VALUE);
 		BigInteger maxUInt32 = new BigInteger("4294967295"); // 2^32 - 1
@@ -2083,40 +2086,40 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		{ // LONG (int64)
 			if (bi.compareTo(minInt64) < 0 || bi.compareTo(maxInt64) > 0)
 			{
-				logError(ctx.start, "Long literal out of range: " + originalText); // [cite: 2636]
+				logError(ctx.start, "Long literal out of range: " + originalText);
 				note(ctx, ErrorType.INSTANCE);
 				return;
 			}
-			note(ctx, PrimitiveType.INT64); // [cite: 2636]
-			noteInfo(ctx, bi.longValue()); // [cite: 2637]
+			note(ctx, PrimitiveType.INT64);
+			noteInfo(ctx, bi.longValue());
 		}
 		else
 		{ // No suffix: Try int32, then int64
 			if (bi.compareTo(minInt32) >= 0 && bi.compareTo(maxInt32) <= 0)
 			{
-				note(ctx, PrimitiveType.INT32); // [cite: 2637]
-				noteInfo(ctx, bi.intValue()); // [cite: 2637]
+				note(ctx, PrimitiveType.INT32);
+				noteInfo(ctx, bi.intValue());
 			}
 			else if (bi.compareTo(minInt64) >= 0 && bi.compareTo(maxInt64) <= 0)
 			{
-				note(ctx, PrimitiveType.INT64); // [cite: 2638]
-				noteInfo(ctx, bi.longValue()); // [cite: 2638]
+				note(ctx, PrimitiveType.INT64);
+				noteInfo(ctx, bi.longValue());
 			}
-			// --- NEW: Check for large positive numbers that fit in uint64 ---
+			// Check for large positive numbers that fit in uint64
 			// This allows `var x = 18446744073709551615;` to be inferred as uint64
 			// (This part is optional, depending on your language rules for unsuffixed literals)
-        /*
-        else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0) {
-            logError(ctx.start, "Integer literal is too large for 'int64'. Use 'ul' suffix for 'uint64': " + originalText);
-             // Or, if you want to be lenient:
-             // note(ctx, PrimitiveType.UINT64);
-             // noteInfo(ctx, bi.longValue());
-            note(ctx, ErrorType.INSTANCE);
-        }
-        */
+			/*
+			else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0) {
+				logError(ctx.start, "Integer literal is too large for 'int64'. Use 'ul' suffix for 'uint64': " + originalText);
+				 // Or, if you want to be lenient:
+				 // note(ctx, PrimitiveType.UINT64);
+				 // noteInfo(ctx, bi.longValue());
+				note(ctx, ErrorType.INSTANCE);
+			}
+			*/
 			else
 			{
-				logError(ctx.start, "Integer literal out of range: " + originalText); // [cite: 2638]
+				logError(ctx.start, "Integer literal out of range: " + originalText);
 				note(ctx, ErrorType.INSTANCE);
 			}
 		}

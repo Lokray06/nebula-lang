@@ -205,9 +205,9 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		boolean isPublic = ctx.modifiers() != null ? ctx.modifiers().getText().contains("public") : false;
 		ClassSymbol cs = new ClassSymbol(className, currentScope, false, isPublic);
 
-			String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-			String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
-			declaredClasses.put(fqn, cs);
+		String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
+		String fqn = namespacePrefix.isEmpty() ? className : namespacePrefix + "." + className;
+		declaredClasses.put(fqn, cs);
 
 		Debug.logDebug("Defined class " + cs.getName());
 		currentScope.define(cs);
@@ -409,6 +409,9 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
 		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, params, currentScope, isStatic, isPublic, false, false);
 		currentClass.defineMethod(ms);
+
+		visitChildren(ctx);
+
 		return null;
 	}
 
@@ -657,6 +660,57 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		if (ctx.expression() != null)
 		{
 			visit(ctx.expression());
+		}
+
+		return null;
+	}
+
+	@Override
+	public Void visitBlock(NebulaParser.BlockContext ctx)
+	{
+		// Create a nested scope for the block
+		Scope oldScope = currentScope;
+		currentScope = new Scope(currentScope);
+
+		// Visit statements/decls inside
+		visitChildren(ctx);
+
+		// Restore previous scope
+		currentScope = oldScope;
+		return null;
+	}
+
+	@Override
+	public Void visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
+	{
+		System.out.println("VISITING VARIABLE DECLARATION FROM THE SYMBOL TABLE BUILDER=========================================");
+		// e.g. int a = 5, b = 10;
+		Type varType = resolveTypeFromCtx(ctx.type());
+
+		for (var decl : ctx.variableDeclarator())
+		{
+			String varName = decl.ID().getText();
+
+			// Prevent redefinition in the same scope
+			if (currentScope.resolveLocally(varName).isPresent())
+			{
+				errorHandler.logError(decl.ID().getSymbol(),
+						"Variable '" + varName + "' is already defined in this scope.",
+						currentClass);
+				continue;
+			}
+
+			// Create symbol for local variable
+			VariableSymbol vs = new VariableSymbol(varName, varType, false, false, false);
+
+			// Define in the current scope
+			currentScope.define(vs);
+
+			// Visit initializer expression if present
+			if (decl.expression() != null)
+			{
+				visit(decl.expression());
+			}
 		}
 
 		return null;

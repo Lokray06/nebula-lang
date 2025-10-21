@@ -286,11 +286,6 @@ public class SemanticAnalyzer
 
 	public Optional<Object> getResolvedInfo(ParseTree node)
 	{
-		for (ParseTree k : resolvedInfo.keySet())
-		{
-			System.out.println("resolvedInfo key: " + k.getClass().getSimpleName() + " -> interval=" + k.getSourceInterval() + " text=" + k.getText());
-		}
-
 		if (node == null)
 		{
 			return Optional.empty();
