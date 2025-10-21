@@ -570,8 +570,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				&& ctx.getChild(1) instanceof TerminalNode
 				&& ((TerminalNode) ctx.getChild(1)).getSymbol().getType() == NebulaLexer.L_PAREN_SYM; // Assuming NebulaLexer is available
 
-		System.out.println("================================VISITING STATEMENT EXPRESSION: " + ctx.getText() + " Is method call: " + isMethodCall);
-
 		if (isMethodCall)
 		{
 			// --- START REPLACEMENT ---
@@ -610,7 +608,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			if (resolvedSymbol instanceof MethodSymbol resolvedMethod)
 			{
 				Debug.logDebug(resolvedMethod.toString());
-				System.out.println("NOTE: recorded for interval " + ctx.getSourceInterval() + " text=" + ctx.getText());
 			}
 			else
 			{
@@ -1199,7 +1196,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				if (resolvedMethod != null)
 				{
 					note(ctx, resolvedMethod);
-					System.out.println("NOTE: recorded for interval " + ctx.getSourceInterval() + " text=" + ctx.getText() + " -> " + resolvedMethod.getName());
 				}
 				currentType = callType;
 				currentSymbol = resolvedMethod;

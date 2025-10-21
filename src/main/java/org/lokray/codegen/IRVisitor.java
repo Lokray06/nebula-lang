@@ -178,72 +178,155 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 	}
 
-	@Override
-	public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
-	{
-		if (ctx.STRING_LITERAL() != null)
-		{
-			String value = ctx.STRING_LITERAL().getText();
-			value = value.substring(1, value.length() - 1); // strip quotes
+    @Override
+    public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
+    {
+        if (ctx.STRING_LITERAL() != null)
+        {
+            String value = ctx.STRING_LITERAL().getText();
+            value = value.substring(1, value.length() - 1); // strip quotes
 
-			// --- START FIX ---
+            // --- START FIX for String ---
 
-			// 1. Create the global constant for the raw string data (e.g., [14 x i8] c"Hello world!!!")
-			//    We use DontNullTerminate = 1 because String.cpp uses .write() with a length,
-			//    so we don't need the extra '\0' byte.
-			LLVMValueRef stringData = LLVMConstStringInContext(moduleContext, value, value.length(), 1);
-			LLVMValueRef globalData = LLVMAddGlobal(module, LLVMTypeOf(stringData), ".str.data");
-			LLVMSetInitializer(globalData, stringData);
-			LLVMSetGlobalConstant(globalData, 1);
-			LLVMSetLinkage(globalData, LLVMPrivateLinkage);
+            // 1. Create the global constant for the raw string data (e.g., [14 x i8] c"Hello world!!!")
+            //    We use DontNullTerminate = 1 because String.cpp uses .write() with a length,
+            //    so we don't need the extra '\0' byte.
+            LLVMValueRef stringData = LLVMConstStringInContext(moduleContext, value, value.length(), 1);
+            LLVMValueRef globalData = LLVMAddGlobal(module, LLVMTypeOf(stringData), ".str.data");
+            LLVMSetInitializer(globalData, stringData);
+            LLVMSetGlobalConstant(globalData, 1);
+            LLVMSetLinkage(globalData, LLVMPrivateLinkage);
 
-			// 2. Create a constant pointer (i8*) to the first element of that data.
-			//    This is a GEP (Get Element Ptr) with indices [0, 0].
-			LLVMValueRef zero32 = LLVMConstInt(LLVMInt32Type(), 0, 0);
-			LLVMValueRef[] indices = {zero32, zero32};
-			LLVMValueRef dataPtr = LLVMConstGEP2(LLVMTypeOf(stringData), globalData, new PointerPointer<>(indices), 2);
+            // 2. Create a constant pointer (i8*) to the first element of that data.
+            //    This is a GEP (Get Element Ptr) with indices [0, 0].
+            LLVMValueRef zero32 = LLVMConstInt(LLVMInt32Type(), 0, 0);
+            LLVMValueRef[] indices = {zero32, zero32};
+            LLVMValueRef dataPtr = LLVMConstGEP2(LLVMTypeOf(stringData), globalData, new PointerPointer<>(indices), 2);
 
-			// 3. Get your string struct type
-			LLVMTypeRef stringType = TypeConverter.getStringStructTypeForContext(moduleContext);
+            // 3. Get your string struct type
+            LLVMTypeRef stringType = TypeConverter.getStringStructTypeForContext(moduleContext);
 
-			// 4. Construct the struct constant, now using the correct { i8*, i32 } layout
-			LLVMValueRef[] fields = new LLVMValueRef[]{
-					dataPtr,                                        // The i8* pointer
-					LLVMConstInt(LLVMInt32Type(), value.length(), 0) // The i32 length
-			};
-			LLVMValueRef structConst = LLVMConstNamedStruct(stringType, new PointerPointer<>(fields), fields.length);
+            // 4. Construct the struct constant, now using the correct { i8*, i32 } layout
+            LLVMValueRef[] fields = new LLVMValueRef[]{
+                    dataPtr,                                        // The i8* pointer
+                    LLVMConstInt(LLVMInt32Type(), value.length(), 0) // The i32 length
+            };
+            LLVMValueRef structConst = LLVMConstNamedStruct(stringType, new PointerPointer<>(fields), fields.length);
 
-			// 5. Store the constant *struct* in its own global variable
-			LLVMValueRef globalString = LLVMAddGlobal(module, LLVMTypeOf(structConst), "str_literal_struct");
-			LLVMSetInitializer(globalString, structConst);
-			LLVMSetGlobalConstant(globalString, 1);
-			LLVMSetLinkage(globalString, LLVMPrivateLinkage);
+            // 5. Store the constant *struct* in its own global variable
+            LLVMValueRef globalString = LLVMAddGlobal(module, LLVMTypeOf(structConst), "str_literal_struct");
+            LLVMSetInitializer(globalString, structConst);
+            LLVMSetGlobalConstant(globalString, 1);
+            LLVMSetLinkage(globalString, LLVMPrivateLinkage);
 
-			// 6. Return the pointer to the global struct
-			return globalString;
+            // 6. Return the pointer to the global struct
+            return globalString;
 
-			// --- END FIX ---
-		}
-		if (ctx.INTEGER_LITERAL() != null)
-		{
-			int val = Integer.parseInt(ctx.INTEGER_LITERAL().getText());
-			return LLVMConstInt(LLVMInt32Type(), val, 1);
-		}
-		if (ctx.DOUBLE_LITERAL() != null)
-		{
-			try
-			{
-				double val = Double.parseDouble(ctx.DOUBLE_LITERAL().getText());
-				return LLVMConstReal(LLVMDoubleType(), val);
-			}
-			catch (NumberFormatException e)
-			{
-				Debug.logError("Invalid double literal format: " + ctx.DOUBLE_LITERAL().getText());
-				return null;
-			}
-		}
-		return super.visitLiteral(ctx);
-	}
+            // --- END FIX ---
+        }
+        if (ctx.INTEGER_LITERAL() != null)
+        {
+            // LLVMInt32Type() maps to 32-bit int
+            int val = Integer.parseInt(ctx.INTEGER_LITERAL().getText());
+            return LLVMConstInt(LLVMInt32Type(), val, 1);
+        }
+        if (ctx.LONG_LITERAL() != null)
+        {
+            // LLVMInt64Type() maps to 64-bit long
+            String text = ctx.LONG_LITERAL().getText();
+            // Strip the 'l' or 'L' suffix
+            text = text.substring(0, text.length() - 1);
+            try
+            {
+                long val = Long.parseLong(text);
+                return LLVMConstInt(LLVMInt64Type(), val, 1);
+            }
+            catch (NumberFormatException e)
+            {
+                Debug.logError("Invalid long literal format: " + ctx.LONG_LITERAL().getText());
+                return null;
+            }
+        }
+        if (ctx.HEX_LITERAL() != null)
+        {
+            // Assume default LLVMInt32Type() for non-suffixed hex
+            String text = ctx.HEX_LITERAL().getText();
+            // Strip "0x" and optional "l"/"L" suffix
+            if (text.endsWith("l") || text.endsWith("L"))
+            {
+                text = text.substring(2, text.length() - 1);
+                try
+                {
+                    long val = Long.parseUnsignedLong(text, 16);
+                    return LLVMConstInt(LLVMInt64Type(), val, 1);
+                }
+                catch (NumberFormatException e)
+                {
+                    Debug.logError("Invalid long hex literal format: " + ctx.HEX_LITERAL().getText());
+                    return null;
+                }
+            }
+            else
+            {
+                text = text.substring(2);
+                try
+                {
+                    int val = (int) Long.parseUnsignedLong(text, 16);
+                    return LLVMConstInt(LLVMInt32Type(), val, 1);
+                }
+                catch (NumberFormatException e)
+                {
+                    Debug.logError("Invalid int hex literal format: " + ctx.HEX_LITERAL().getText());
+                    return null;
+                }
+            }
+        }
+        if (ctx.DOUBLE_LITERAL() != null)
+        {
+            try
+            {
+                // LLVMDoubleType() maps to 64-bit float
+                double val = Double.parseDouble(ctx.DOUBLE_LITERAL().getText());
+                return LLVMConstReal(LLVMDoubleType(), val);
+            }
+            catch (NumberFormatException e)
+            {
+                Debug.logError("Invalid double literal format: " + ctx.DOUBLE_LITERAL().getText());
+                return null;
+            }
+        }
+        if (ctx.FLOAT_LITERAL() != null)
+        {
+            try
+            {
+                String text = ctx.FLOAT_LITERAL().getText();
+                // Strip the 'f' or 'F' suffix for parsing (although Float.parseFloat often handles it)
+                text = text.substring(0, text.length() - 1);
+                // LLVMFloatType() maps to 32-bit float
+                float val = Float.parseFloat(text);
+                return LLVMConstReal(LLVMFloatType(), val);
+            }
+            catch (NumberFormatException e)
+            {
+                Debug.logError("Invalid float literal format: " + ctx.FLOAT_LITERAL().getText());
+                return null;
+            }
+        }
+        if (ctx.BOOLEAN_LITERAL() != null)
+        {
+            // LLVMInt1Type() maps to 1-bit boolean
+            boolean isTrue = ctx.BOOLEAN_LITERAL().getText().equals("true");
+            return LLVMConstInt(LLVMInt1Type(), isTrue ? 1 : 0, 0);
+        }
+        if (ctx.CHAR_LITERAL() != null)
+        {
+            // TODO: Handle character literals and potential escape sequences (maps to i8)
+            Debug.logWarning("Character literals are not yet fully implemented in IRVisitor.");
+            return LLVMConstInt(LLVMInt8Type(), 0, 0); // Placeholder
+        }
+
+        return super.visitLiteral(ctx);
+    }
 
 	@Override
 	public LLVMValueRef visitReturnStatement(NebulaParser.ReturnStatementContext ctx)

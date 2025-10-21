@@ -172,6 +172,18 @@ BIT_L_SHIFT_COMP: '<<=';
 BIT_R_SHIFT_COMP: '>>=';
 
 // ---------------------- LITERALS ----------------------
+HEX_LITERAL
+    :   '0' [xX] HEX_DIGITS [Ll]?
+    ;
+
+LONG_LITERAL
+    :   DECIMAL_DIGITS [Ll]
+    ;
+
+INTEGER_LITERAL
+    :   DECIMAL_DIGITS
+    ;
+
 fragment EXPONENT: [eE] [+-]? DECIMAL_DIGITS;
 
 FLOAT_LITERAL
@@ -183,21 +195,9 @@ FLOAT_LITERAL
     ;
 
 DOUBLE_LITERAL
-    :   DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
+    :   DECIMAL_DIGITS? '.' DECIMAL_DIGITS EXPONENT?
     |   '.' DECIMAL_DIGITS EXPONENT?
     |   DECIMAL_DIGITS EXPONENT // Handles cases like 1e10
-    ;
-
-HEX_LITERAL
-    :   '0' [xX] HEX_DIGITS [Ll]?
-    ;
-
-LONG_LITERAL
-    :   DECIMAL_DIGITS [Ll]
-    ;
-
-INTEGER_LITERAL
-    :   DECIMAL_DIGITS
     ;
 
 BOOLEAN_LITERAL
