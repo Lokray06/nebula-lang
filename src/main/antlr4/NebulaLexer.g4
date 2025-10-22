@@ -173,31 +173,33 @@ BIT_R_SHIFT_COMP: '>>=';
 
 // ---------------------- LITERALS ----------------------
 HEX_LITERAL
-    :   '0' [xX] HEX_DIGITS [Ll]?
+    :   '-'? '0' [xX] HEX_DIGITS [Ll]?
     ;
 
 LONG_LITERAL
-    :   DECIMAL_DIGITS [Ll]
+    :   '-'? DECIMAL_DIGITS [Ll]
     ;
 
 INTEGER_LITERAL
-    :   DECIMAL_DIGITS
+    :   '-'? DECIMAL_DIGITS
     ;
 
 fragment EXPONENT: [eE] [+-]? DECIMAL_DIGITS;
 
 FLOAT_LITERAL
-    :   ( DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
-        | '.' DECIMAL_DIGITS EXPONENT?
-        | DECIMAL_DIGITS EXPONENT
-        ) [fF]
-    |   DECIMAL_DIGITS [fF] // Handles cases like 10f
+    :   '-'? (
+            DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
+        |   '.' DECIMAL_DIGITS EXPONENT?
+        |   DECIMAL_DIGITS EXPONENT
+        ) [fF]?
     ;
 
 DOUBLE_LITERAL
-    :   DECIMAL_DIGITS? '.' DECIMAL_DIGITS EXPONENT?
-    |   '.' DECIMAL_DIGITS EXPONENT?
-    |   DECIMAL_DIGITS EXPONENT // Handles cases like 1e10
+    :   '-'? (
+            DECIMAL_DIGITS? '.' DECIMAL_DIGITS EXPONENT?
+        |   '.' DECIMAL_DIGITS EXPONENT?
+        |   DECIMAL_DIGITS EXPONENT
+        )
     ;
 
 BOOLEAN_LITERAL
