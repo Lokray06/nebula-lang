@@ -315,4 +315,30 @@ public class SemanticAnalyzer
         }
         return Optional.empty();
     }
+
+	String getResolvedSymbolsList()
+	{
+		StringBuilder result = new StringBuilder();
+
+		for (Symbol symbol : resolvedSymbols.values())
+		{
+			result.append(symbol.getName());
+			result.append("\n");
+		}
+
+		return result.toString();
+	}
+
+	String getResolvedTypesList()
+	{
+		StringBuilder result = new StringBuilder();
+
+		for (Symbol type : resolvedTypes.values())
+		{
+			result.append(type.getName());
+			result.append("\n");
+		}
+
+		return result.toString();
+	}
 }
