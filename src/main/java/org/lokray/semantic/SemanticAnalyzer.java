@@ -217,7 +217,7 @@ public class SemanticAnalyzer
             if (symbol instanceof StructSymbol)
             {
                 pType.setBackingStruct((StructSymbol) symbol);
-                Debug.logDebug("  Linked " + pType.getName() + " -> " + fqn);
+                //Debug.logDebug("  Linked " + pType.getName() + " -> " + fqn);
             }
         }
     }

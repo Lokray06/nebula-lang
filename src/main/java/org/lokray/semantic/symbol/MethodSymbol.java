@@ -9,6 +9,7 @@ import java.util.stream.Collectors; // NEW
 public class MethodSymbol extends Scope implements Symbol
 {
 	private final String name;
+    private final String mangledName;
 	private Type returnType;
 	// UPDATED: Use a list of ParameterSymbol instead of just Type
 	private List<ParameterSymbol> parameters;
@@ -27,13 +28,46 @@ public class MethodSymbol extends Scope implements Symbol
 		this.isPublic = isPublic;
 		this.isConstructor = isConstructor;
 		this.isNative = isNative;
+        this.mangledName = constructMangledName();
 	}
 
-	@Override
+    private String constructMangledName()
+    {
+        Scope parent = this.getEnclosingScope();
+        if (parent instanceof ClassSymbol)
+        {
+            ClassSymbol classSymbol = (ClassSymbol) parent;
+            String fqn = classSymbol.getName();
+            if (classSymbol.getEnclosingScope() instanceof NamespaceSymbol)
+            {
+                fqn = ((NamespaceSymbol) classSymbol.getEnclosingScope()).getFqn() + "." + classSymbol.getName();
+            }
+
+            String baseName = fqn.replace('.', '_') + "_" + this.getName();
+            StringBuilder mangled = new StringBuilder(baseName);
+
+            for (Type paramType : this.getParameterTypes())
+            {
+                mangled.append("__").append(paramType.getName());
+            }
+
+            mangled.append("___").append(this.getType().getName());
+
+            return mangled.toString();
+        }
+        return this.getName();
+    }
+
+    @Override
 	public String getName()
 	{
 		return name;
 	}
+
+    public String getMangledName()
+    {
+        return  this.mangledName;
+    }
 
 	@Override
 	public Type getType()

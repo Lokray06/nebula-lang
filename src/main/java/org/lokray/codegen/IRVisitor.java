@@ -31,7 +31,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	private LLVMValueRef currentFunction;
 	private LLVMBuilderRef builder;
 	private final LLVMModuleRef module;
-	private final LLVMContextRef moduleContext; // <-- add this
+	private final LLVMContextRef moduleContext;
 
 	public IRVisitor(SemanticAnalyzer semanticAnalyzer, LLVMContext llvmContext)
 	{
@@ -43,57 +43,102 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         scopedValues.push(new HashMap<>());
 	}
 
-	private String getMangledName(MethodSymbol methodSymbol)
-	{
-		Scope parent = methodSymbol.getEnclosingScope();
-		if (parent instanceof ClassSymbol)
-		{
-			ClassSymbol classSymbol = (ClassSymbol) parent;
-			String fqn = classSymbol.getName();
-			if (classSymbol.getEnclosingScope() instanceof NamespaceSymbol)
-			{
-				fqn = ((NamespaceSymbol) classSymbol.getEnclosingScope()).getFqn() + "." + classSymbol.getName();
-			}
+    @Override
+    public LLVMValueRef visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+    {
+        String methodName = ctx.ID().getText();
 
-			String baseName = fqn.replace('.', '_') + "_" + methodSymbol.getName();
-			StringBuilder mangled = new StringBuilder(baseName);
+        if (methodName.equals("main"))
+        {
+            // --- EXISTING MAIN LOGIC (Keep as is) ---
+            LLVMTypeRef[] noParams = {};
+            LLVMTypeRef mainFunctionType = LLVMFunctionType(LLVMInt32Type(), new PointerPointer<>(noParams), 0, 0);
+            LLVMValueRef mainFunction = LLVMAddFunction(llvmContext.getModule(), "main", mainFunctionType);
+            currentFunction = mainFunction;
 
-			for (Type paramType : methodSymbol.getParameterTypes())
-			{
-				mangled.append("__").append(canonicalTypeName(paramType));
-			}
+            LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlock(mainFunction, "entry");
+            LLVMPositionBuilderAtEnd(llvmContext.getBuilder(), entryBlock);
 
-			mangled.append("___").append(canonicalTypeName(methodSymbol.getType()));
+            visit(ctx.block());
+            LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(mainFunction);
+            if (LLVMGetBasicBlockTerminator(lastBlock) == null)
+            {
+                LLVMBuildRet(llvmContext.getBuilder(), LLVMConstInt(LLVMInt32Type(), 0, 0));
+            }
 
-			return mangled.toString();
-		}
-		return methodSymbol.getName();
-	}
+            currentFunction = null; // Clear current function context
+            return mainFunction;
+        }
 
-	@Override
-	public LLVMValueRef visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-	{
-		if (ctx.ID().getText().equals("main"))
-		{
-			LLVMTypeRef[] noParams = {};
-			LLVMTypeRef mainFunctionType = LLVMFunctionType(LLVMInt32Type(), new PointerPointer<>(noParams), 0, 0);
-			LLVMValueRef mainFunction = LLVMAddFunction(llvmContext.getModule(), "main", mainFunctionType);
-			currentFunction = mainFunction;
+        // 1. Resolve the MethodSymbol
+        Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+        if (symbolOpt.isEmpty() || !(symbolOpt.get() instanceof MethodSymbol methodSymbol))
+        {
+            // This should not happen if semantic analysis passed.
+            Debug.logError("IR: Method declaration symbol not found or is not a MethodSymbol: " + ctx.getText());
+            return null;
+        }
 
-			LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlock(mainFunction, "entry");
-			LLVMPositionBuilderAtEnd(llvmContext.getBuilder(), entryBlock);
+        // --- FIX: Logic for ALL other (user-defined) methods ---
+        String mangledName = methodSymbol.getMangledName();
+        Debug.logWarning("IR: Defining function: " + mangledName);
 
-			visit(ctx.block());
-			LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(mainFunction);
-			if (LLVMGetBasicBlockTerminator(lastBlock) == null)
-			{
-				LLVMBuildRet(llvmContext.getBuilder(), LLVMConstInt(LLVMInt32Type(), 0, 0));
-			}
+        // 2. Create/Get the Function Prototype
+        LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
+        if (function == null)
+        {
+            List<Type> paramTypes = methodSymbol.getParameterTypes();
+            LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
+            for (int i = 0; i < paramTypes.size(); i++)
+            {
+                llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext);
+            }
+            LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType(), moduleContext);
+            LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
+            function = LLVMAddFunction(module, mangledName, functionType);
+        }
 
-			return mainFunction;
-		}
-		return null;
-	}
+        // 3. Create Entry Block and Position Builder
+        LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "entry");
+        LLVMPositionBuilderAtEnd(builder, entryBlock);
+
+        // 4. Set context and process body
+        LLVMValueRef oldFunction = currentFunction;
+        currentFunction = function;
+        Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);
+        namedValues.clear(); // Clear namedValues for the function's scope
+
+        // ** Process parameters here if applicable **
+        // (You would add code to create allocas and store parameter values here)
+        // For now, this is a placeholder.
+
+        // 5. Visit the body
+        visit(ctx.block());
+
+        // 6. Finalize (Add implicit return for non-terminated blocks/void functions)
+        LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(function);
+        if (LLVMGetBasicBlockTerminator(lastBlock) == null)
+        {
+            Type returnType = methodSymbol.getType();
+            if (returnType == PrimitiveType.VOID) // Assuming PrimitiveType.VOID exists
+            {
+                LLVMBuildRetVoid(builder);
+            }
+            else
+            {
+                // Add a default return (e.g., zero for numeric types) - **Requires more robust handling**
+                // For simplicity with your example, we'll assume a return is always present.
+                // If the language allows a non-void function to "fall off the end",
+                // you must insert an unreachable instruction or a zero return based on type.
+            }
+        }
+
+        // 7. Restore context
+        namedValues.putAll(outerValues);
+        currentFunction = oldFunction;
+
+        return function;
+    }
 
 	@Override
 	public LLVMValueRef visitStatementExpression(NebulaParser.StatementExpressionContext ctx)
@@ -125,7 +170,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			// --- Symbol Found: Proceed with Call Generation ---
 			Debug.logWarning("IR: RESOLUTION SUCCESSFUL. Proceeding with code generation for method: " + methodSymbol); // Log the full symbol
 
-			String mangledName = getMangledName(methodSymbol);
+			String mangledName = methodSymbol.getMangledName();
 			Debug.logWarning("IR: Generated mangled name: " + mangledName);
 
 			// 1. Function Prototype/Definition Lookup
@@ -423,8 +468,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
     @Override
     public LLVMValueRef visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
     {
-        System.out.println("================================================ VISITING VARIABLE DECLARATION IN THE IR VISITOR");
-
         Optional<Type> nebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.type());
         // If the semantic analyzer resolves it, it *must* be present here.
         if (nebulaTypeOpt.isEmpty())
@@ -448,7 +491,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             if (declarator.expression() != null)
             {
                 LLVMValueRef initVal = visit(declarator.expression());
-                System.out.println("============================================ VISITING INITIALIZER RETURNED:" + declarator.expression().getText());
 
                 if (initVal == null)
                 {
@@ -499,214 +541,227 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 	}
 
-	@Override
-	public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
-	{
-		// Strings: keep your existing implementation (unchanged).
-		if (ctx.STRING_LITERAL() != null)
-		{
-			String value = ctx.STRING_LITERAL().getText();
-			value = value.substring(1, value.length() - 1); // strip quotes
+    @Override
+    public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
+    {
+        System.out.println("======================VISITING LITERAL FOR: " + ctx.getText() + " OF TYPE " + ctx.FLOAT_LITERAL());
+        // Strings: keep your existing implementation (unchanged).
+        if (ctx.STRING_LITERAL() != null)
+        {
+            String value = ctx.STRING_LITERAL().getText();
+            value = value.substring(1, value.length() - 1); // strip quotes
 
-			// --- START FIX for String ---
-			LLVMValueRef stringData = LLVMConstStringInContext(moduleContext, value, value.length(), 1);
-			LLVMValueRef globalData = LLVMAddGlobal(module, LLVMTypeOf(stringData), ".str.data");
-			LLVMSetInitializer(globalData, stringData);
-			LLVMSetGlobalConstant(globalData, 1);
-			LLVMSetLinkage(globalData, LLVMPrivateLinkage);
+            // --- START FIX for String ---
+            LLVMValueRef stringData = LLVMConstStringInContext(moduleContext, value, value.length(), 1);
+            LLVMValueRef globalData = LLVMAddGlobal(module, LLVMTypeOf(stringData), ".str.data");
+            LLVMSetInitializer(globalData, stringData);
+            LLVMSetGlobalConstant(globalData, 1);
+            LLVMSetLinkage(globalData, LLVMPrivateLinkage);
 
-			LLVMValueRef zero32 = LLVMConstInt(LLVMInt32Type(), 0, 0);
-			LLVMValueRef[] indices = {zero32, zero32};
-			LLVMValueRef dataPtr = LLVMConstGEP2(LLVMTypeOf(stringData), globalData, new PointerPointer<>(indices), 2);
+            LLVMValueRef zero32 = LLVMConstInt(LLVMInt32Type(), 0, 0);
+            LLVMValueRef[] indices = {zero32, zero32};
+            LLVMValueRef dataPtr = LLVMConstGEP2(LLVMTypeOf(stringData), globalData, new PointerPointer<>(indices), 2);
 
-			LLVMTypeRef stringType = TypeConverter.getStringStructTypeForContext(moduleContext);
+            // NOTE: Assuming TypeConverter.getStringStructTypeForContext is correctly defined
+            LLVMTypeRef stringType = TypeConverter.getStringStructTypeForContext(moduleContext);
 
-			LLVMValueRef[] fields = new LLVMValueRef[]{
-					dataPtr,
-					LLVMConstInt(LLVMInt32Type(), value.length(), 0)
-			};
-			LLVMValueRef structConst = LLVMConstNamedStruct(stringType, new PointerPointer<>(fields), fields.length);
+            LLVMValueRef[] fields = new LLVMValueRef[]{
+                    dataPtr,
+                    LLVMConstInt(LLVMInt32Type(), value.length(), 0)
+            };
+            LLVMValueRef structConst = LLVMConstNamedStruct(stringType, new PointerPointer<>(fields), fields.length);
 
-			LLVMValueRef globalString = LLVMAddGlobal(module, LLVMTypeOf(structConst), "str_literal_struct");
-			LLVMSetInitializer(globalString, structConst);
-			LLVMSetGlobalConstant(globalString, 1);
-			LLVMSetLinkage(globalString, LLVMPrivateLinkage);
+            LLVMValueRef globalString = LLVMAddGlobal(module, LLVMTypeOf(structConst), "str_literal_struct");
+            LLVMSetInitializer(globalString, structConst);
+            LLVMSetGlobalConstant(globalString, 1);
+            LLVMSetLinkage(globalString, LLVMPrivateLinkage);
 
-			return globalString;
-			// --- END FIX for String ---
-		}
+            return globalString;
+            // --- END FIX for String ---
+        }
 
-		// Try to reuse semantic-phase parsed constant and resolved type if available
-		Object semConst = null;
-		org.lokray.semantic.type.Type semType = null;
-		try
-		{
-			// FIX 1 & 2: Use getResolvedInfo for constant and handle Optional for both constant and type
-			Optional<Object> constantOpt = semanticAnalyzer.getResolvedInfo(ctx);
-			Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
+        // Try to reuse semantic-phase parsed constant and resolved type if available
+        Object semConst = null;
+        org.lokray.semantic.type.Type semType = null;
+        try
+        {
+            Optional<Object> constantOpt = semanticAnalyzer.getResolvedInfo(ctx);
+            Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
 
-			if (constantOpt.isPresent())
-			{
-				semConst = constantOpt.get();
-			}
-			if (typeOpt.isPresent())
-			{
-				semType = typeOpt.get();
-			}
-		}
-		catch (Exception ignored)
-		{
-			// If your semantic analyzer API differs, this is non-fatal: we'll fall back to parsing below.
-		}
+            if (constantOpt.isPresent())
+            {
+                semConst = constantOpt.get();
+            }
+            if (typeOpt.isPresent())
+            {
+                semType = typeOpt.get();
+            }
+        }
+        catch (Exception ignored)
+        {
+            // If your semantic analyzer API differs, this is non-fatal: we'll fall back to parsing below.
+        }
 
-		// Helper to safely build LLVM integer constants from BigInteger and bit width.
-		java.util.function.BiFunction<BigInteger, Integer, LLVMValueRef> buildIntConst =
-				(bigInt, bits) ->
-				{
-					BigInteger min64 = BigInteger.valueOf(Long.MIN_VALUE);
-					BigInteger max64 = BigInteger.valueOf(Long.MAX_VALUE);
-					BigInteger min32 = BigInteger.valueOf(Integer.MIN_VALUE);
-					BigInteger max32 = BigInteger.valueOf(Integer.MAX_VALUE);
+        // Helper to safely build LLVM integer constants from BigInteger and bit width.
+        java.util.function.BiFunction<BigInteger, Integer, LLVMValueRef> buildIntConst =
+                (bigInt, bits) ->
+                {
+                    BigInteger min64 = BigInteger.valueOf(Long.MIN_VALUE);
+                    BigInteger max64 = BigInteger.valueOf(Long.MAX_VALUE);
+                    BigInteger min32 = BigInteger.valueOf(Integer.MIN_VALUE);
+                    BigInteger max32 = BigInteger.valueOf(Integer.MAX_VALUE);
 
-					if (bits == 32)
-					{
-						if (bigInt.compareTo(min32) < 0 || bigInt.compareTo(max32) > 0)
-						{
-							Debug.logError("Integer literal out of range for i32: " + ctx.getText());
-							return null;
-						}
-						int v = bigInt.intValue();
-						// LLVMConstInt takes unsigned long for value; pass unsigned representation of int
-						return LLVMConstInt(LLVMInt32Type(), Integer.toUnsignedLong(v), 1);
-					}
-					else if (bits == 64)
-					{
-						if (bigInt.compareTo(min64) < 0 || bigInt.compareTo(max64) > 0)
-						{
-							Debug.logError("Integer literal out of range for i64: " + ctx.getText());
-							return null;
-						}
-						long v = bigInt.longValue();
-						return LLVMConstInt(LLVMInt64Type(), v, 1);
-					}
-					else
-					{
-						Debug.logError("Unsupported integer width: " + bits);
-						return null;
-					}
-				};
+                    if (bits == 32)
+                    {
+                        if (bigInt.compareTo(min32) < 0 || bigInt.compareTo(max32) > 0)
+                        {
+                            Debug.logError("Integer literal out of range for i32: " + ctx.getText());
+                            return null;
+                        }
+                        int v = bigInt.intValue();
+                        // LLVMConstInt takes unsigned long for value; pass unsigned representation of int
+                        return LLVMConstInt(LLVMInt32Type(), Integer.toUnsignedLong(v), 1);
+                    }
+                    else if (bits == 64)
+                    {
+                        if (bigInt.compareTo(min64) < 0 || bigInt.compareTo(max64) > 0)
+                        {
+                            Debug.logError("Integer literal out of range for i64: " + ctx.getText());
+                            return null;
+                        }
+                        long v = bigInt.longValue();
+                        return LLVMConstInt(LLVMInt64Type(), v, 1);
+                    }
+                    else
+                    {
+                        Debug.logError("Unsupported integer width: " + bits);
+                        return null;
+                    }
+                };
 
-		// If semantic info present, use it
-		if (semConst != null && semType != null)
-		{
-			// FIX 3: Check type name instead of calling non-existent isInt64()
-			if (semType.getName().equals("int64"))
-			{
-				long v = ((Number) semConst).longValue();
-				return LLVMConstInt(LLVMInt64Type(), v, 1);
-				// FIX 4: Check type name instead of calling non-existent isInt32()
-			}
-			else if (semType.getName().equals("int32"))
-			{
-				int v = ((Number) semConst).intValue();
-				return LLVMConstInt(LLVMInt32Type(), Integer.toUnsignedLong(v), 1);
-			}
-			// If semanticType is something else, fallthrough to other handlers below.
-		}
+        // If semantic info present, use it
+        if (semConst != null && semType != null)
+        {
+            // Existing Integer Logic
+            if (semType.getName().equals("int64"))
+            {
+                long v = ((Number) semConst).longValue();
+                return LLVMConstInt(LLVMInt64Type(), v, 1);
+            }
+            else if (semType.getName().equals("int32"))
+            {
+                int v = ((Number) semConst).intValue();
+                return LLVMConstInt(LLVMInt32Type(), Integer.toUnsignedLong(v), 1);
+            }
+            // 🚨 NEW FIX: Handle floating point literals using the resolved type/constant 🚨
+            else if (semType.getName().equals("float"))
+            {
+                // Use the float value from the constant, and generate an LLVM float constant
+                float v = ((Number) semConst).floatValue();
+                return LLVMConstReal(LLVMFloatType(), v);
+            }
+            else if (semType.getName().equals("double"))
+            {
+                // Use the double value from the constant, and generate an LLVM double constant
+                double v = ((Number) semConst).doubleValue();
+                return LLVMConstReal(LLVMDoubleType(), v);
+            }
+            // If semanticType is something else, fallthrough to other handlers below.
+        }
 
-		// Defensive fallback parsing if no semantic constant available
-		if (ctx.INTEGER_LITERAL() != null)
-		{
-			try
-			{
-				BigInteger bi = new BigInteger(ctx.INTEGER_LITERAL().getText(), 10);
-				return buildIntConst.apply(bi, 32);
-			}
-			catch (NumberFormatException ex)
-			{
-				Debug.logError("Invalid integer literal: " + ctx.INTEGER_LITERAL().getText());
-				return null;
-			}
-		}
+        // Defensive fallback parsing for integer literals (keep as is)
+        if (ctx.INTEGER_LITERAL() != null)
+        {
+            try
+            {
+                BigInteger bi = new BigInteger(ctx.INTEGER_LITERAL().getText(), 10);
+                return buildIntConst.apply(bi, 32);
+            }
+            catch (NumberFormatException ex)
+            {
+                Debug.logError("Invalid integer literal: " + ctx.INTEGER_LITERAL().getText());
+                return null;
+            }
+        }
 
-		if (ctx.LONG_LITERAL() != null)
-		{
-			String text = ctx.LONG_LITERAL().getText();
-			text = text.substring(0, text.length() - 1); // strip L
-			try
-			{
-				BigInteger bi = new BigInteger(text, 10);
-				return buildIntConst.apply(bi, 64);
-			}
-			catch (NumberFormatException ex)
-			{
-				Debug.logError("Invalid long literal format: " + ctx.LONG_LITERAL().getText());
-				return null;
-			}
-		}
+        if (ctx.LONG_LITERAL() != null)
+        {
+            String text = ctx.LONG_LITERAL().getText();
+            text = text.substring(0, text.length() - 1); // strip L
+            try
+            {
+                BigInteger bi = new BigInteger(text, 10);
+                return buildIntConst.apply(bi, 64);
+            }
+            catch (NumberFormatException ex)
+            {
+                Debug.logError("Invalid long literal format: " + ctx.LONG_LITERAL().getText());
+                return null;
+            }
+        }
 
-		if (ctx.HEX_LITERAL() != null)
-		{
-			String text = ctx.HEX_LITERAL().getText();
-			boolean longSuffix = text.endsWith("l") || text.endsWith("L");
-			String raw = longSuffix ? text.substring(2, text.length() - 1) : text.substring(2);
-			try
-			{
-				BigInteger bi = new BigInteger(raw, 16);
-				return buildIntConst.apply(bi, longSuffix ? 64 : 32);
-			}
-			catch (NumberFormatException ex)
-			{
-				Debug.logError("Invalid hex literal: " + ctx.HEX_LITERAL().getText());
-				return null;
-			}
-		}
+        if (ctx.HEX_LITERAL() != null)
+        {
+            String text = ctx.HEX_LITERAL().getText();
+            boolean longSuffix = text.endsWith("l") || text.endsWith("L");
+            String raw = longSuffix ? text.substring(2, text.length() - 1) : text.substring(2);
+            try
+            {
+                BigInteger bi = new BigInteger(raw, 16);
+                return buildIntConst.apply(bi, longSuffix ? 64 : 32);
+            }
+            catch (NumberFormatException ex)
+            {
+                Debug.logError("Invalid hex literal: " + ctx.HEX_LITERAL().getText());
+                return null;
+            }
+        }
 
-		// Doubles, floats, booleans, chars (reuse your existing code or keep current handling):
-		if (ctx.DOUBLE_LITERAL() != null)
-		{
-			try
-			{
-				double val = Double.parseDouble(ctx.DOUBLE_LITERAL().getText());
-				return LLVMConstReal(LLVMDoubleType(), val);
-			}
-			catch (NumberFormatException e)
-			{
-				Debug.logError("Invalid double literal format: " + ctx.DOUBLE_LITERAL().getText());
-				return null;
-			}
-		}
+        // Doubles, floats, booleans, chars: (Keep these fallbacks as a safety net)
+        if (ctx.DOUBLE_LITERAL() != null)
+        {
+            try
+            {
+                double val = Double.parseDouble(ctx.DOUBLE_LITERAL().getText());
+                return LLVMConstReal(LLVMDoubleType(), val);
+            }
+            catch (NumberFormatException e)
+            {
+                Debug.logError("Invalid double literal format: " + ctx.DOUBLE_LITERAL().getText());
+                return null;
+            }
+        }
 
-		if (ctx.FLOAT_LITERAL() != null)
-		{
-			try
-			{
-				String text = ctx.FLOAT_LITERAL().getText();
-				text = text.substring(0, text.length() - 1);
-				float val = Float.parseFloat(text);
-				return LLVMConstReal(LLVMFloatType(), val);
-			}
-			catch (NumberFormatException e)
-			{
-				Debug.logError("Invalid float literal format: " + ctx.FLOAT_LITERAL().getText());
-				return null;
-			}
-		}
+        if (ctx.FLOAT_LITERAL() != null)
+        {
+            try
+            {
+                String text = ctx.FLOAT_LITERAL().getText();
+                text = text.substring(0, text.length() - 1);
+                float val = Float.parseFloat(text);
+                return LLVMConstReal(LLVMFloatType(), val);
+            }
+            catch (NumberFormatException e)
+            {
+                Debug.logError("Invalid float literal format: " + ctx.FLOAT_LITERAL().getText());
+                return null;
+            }
+        }
 
-		if (ctx.BOOLEAN_LITERAL() != null)
-		{
-			boolean isTrue = ctx.BOOLEAN_LITERAL().getText().equals("true");
-			return LLVMConstInt(LLVMInt1Type(), isTrue ? 1 : 0, 0);
-		}
+        if (ctx.BOOLEAN_LITERAL() != null)
+        {
+            boolean isTrue = ctx.BOOLEAN_LITERAL().getText().equals("true");
+            return LLVMConstInt(LLVMInt1Type(), isTrue ? 1 : 0, 0);
+        }
 
-		if (ctx.CHAR_LITERAL() != null)
-		{
-			Debug.logWarning("Character literals are not yet fully implemented in IRVisitor.");
-			return LLVMConstInt(LLVMInt8Type(), 0, 0); // Placeholder
-		}
+        if (ctx.CHAR_LITERAL() != null)
+        {
+            Debug.logWarning("Character literals are not yet fully implemented in IRVisitor.");
+            return LLVMConstInt(LLVMInt8Type(), 0, 0); // Placeholder
+        }
 
-		return super.visitLiteral(ctx);
-	}
+        return super.visitLiteral(ctx);
+    }
 
 	@Override
 	public LLVMValueRef visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
@@ -789,18 +844,82 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		return null;
 	}
 
-	@Override
-	public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
-	{
-		// Most postfix expressions delegate to their primary part (field access / method calls
-		// are handled elsewhere). This conservative fallback visits the primary and returns whatever
-		// value it produces (or null).
-		if (ctx.primary() != null)
-		{
-			return visit(ctx.primary());
-		}
-		return visitChildren(ctx);
-	}
+    /**
+     * --- UPDATED METHOD ---
+     * Handles expressions that are method calls (e.g., getPi()) or variable
+     * lookups (e.g., fPi).
+     */
+    @Override
+    public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
+    {
+        // Check if the *entire* postfix expression (e.g., "getPi()")
+        // was resolved to a MethodSymbol by the TypeCheckVisitor.
+        Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+
+        if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
+        {
+            // --- This is a method call used as an expression ---
+            Debug.logWarning("IR (Postfix): Resolved as method call: " + methodSymbol);
+
+            String mangledName = methodSymbol.getMangledName();
+            LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
+
+            // 1. Create Function Prototype if it doesn't exist
+            if (function == null)
+            {
+                Debug.logWarning("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
+                List<Type> paramTypes = methodSymbol.getParameterTypes();
+                LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
+                for (int i = 0; i < paramTypes.size(); i++)
+                {
+                    llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext);
+                }
+                LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType(), moduleContext);
+                LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
+                function = LLVMAddFunction(module, mangledName, functionType);
+            }
+
+            // 2. Prepare arguments
+            List<LLVMValueRef> args = new ArrayList<>();
+            // Find the ArgumentListContext child node
+            NebulaParser.ArgumentListContext argListCtx = null;
+            for (int i = 0; i < ctx.getChildCount(); i++)
+            {
+                if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
+                {
+                    argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
+                    break;
+                }
+            }
+
+            if (argListCtx != null)
+            {
+                Debug.logWarning("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
+                for (NebulaParser.ExpressionContext exprCtx : argListCtx.expression())
+                {
+                    args.add(visit(exprCtx));
+                }
+            }
+
+            PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
+            for (int i = 0; i < args.size(); i++)
+            {
+                argsPtr.put(i, args.get(i));
+            }
+
+            // 3. Build the call instruction
+            Debug.logWarning("IR (Postfix): Building LLVM call instruction for: " + mangledName);
+            // This call *returns a value*, so we return the LLVMValueRef from the call.
+            return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), methodSymbol.getName() + ".call");
+        }
+        else
+        {
+            // --- Not a method call ---
+            // This is likely a variable access (like "fPi") or member access.
+            // Just visit the primary part to load the variable.
+            return visit(ctx.primary());
+        }
+    }
 
     @Override
     public LLVMValueRef visitCastExpression(NebulaParser.CastExpressionContext ctx)
@@ -910,122 +1029,90 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "bitcast");
     }
 
-	@Override
-	public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
-	{
-		// 1) Literal: delegate
-		if (ctx.literal() != null)
-		{
-			return visit(ctx.literal());
-		}
+    @Override
+    public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
+    {
+        // 1) Literal: delegate
+        if (ctx.literal() != null)
+        {
+            return visit(ctx.literal());
+        }
 
-		// 2) Parenthesized expression: ( expr )
-		if (ctx.expression() != null)
-		{
-			return visit(ctx.expression());
-		}
+        // 2) Parenthesized expression: ( expr )
+        if (ctx.expression() != null)
+        {
+            return visit(ctx.expression());
+        }
 
-		// 3) Identifier usage: load from namedValues (the allocation should have been
-		//    created earlier — e.g. loop variable allocation uses createEntryBlockAlloca
-		//    and namedValues.put(varName, varAlloca))
-		if (ctx.ID() != null)
-		{
+        // 3) Identifier usage
+        if (ctx.ID() != null)
+        {
             System.out.println("Visiting primary expression for ID:" + ctx.ID().getText());
-			String name = ctx.ID().getText();
+            String name = ctx.ID().getText();
+            Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 
-			// Prefer a symbol-based lookup first (semantic analyzer stores resolved symbols for parse nodes).
-			Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+            if (symOpt.isPresent())
+            {
+                Symbol sym = symOpt.get();
 
-
-			if (symOpt.isPresent())
-			{
-				Symbol sym = symOpt.get();
-
-				if (sym instanceof VariableSymbol varSym)
-				{
+                if (sym instanceof VariableSymbol varSym)
+                {
                     System.out.println("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
 
-                    // Find the alloca for this variable
-					LLVMValueRef alloca = namedValues.get(varSym.getName());
-					if (alloca == null)
-					{
-						// If we don't have an alloca in namedValues, it may be a parameter/field/global.
-						// Try to defensively handle some cases:
+                    // --- START FIX ---
+                    // Find the alloca for this variable using the scope-aware lookup
+                    LLVMValueRef alloca = lookupVariable(varSym.getName()); // Use scope-aware lookup
+                    // --- END FIX ---
 
-						// - function parameter case: parameters are named on the LLVM function; try to find it
-						if (currentFunction != null)
-						{
-							// Count params and get them
-							int paramCount = LLVMCountParams(currentFunction);
-							PointerPointer paramsPP = new PointerPointer(paramCount);
-							LLVMGetParams(currentFunction, paramsPP);
+                    if (alloca == null)
+                    {
+                        // --- MODIFIED ERROR ---
+                        // The old parameter-finding logic was unreliable.
+                        // If lookupVariable fails, the alloca is genuinely missing.
+                        Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?");
+                        return null;
+                        // --- END MODIFIED ERROR ---
+                    }
 
-							for (int i = 0; i < paramCount; i++)
-							{
-								// Wrap raw pointer into LLVMValueRef
-								Pointer pptr = paramsPP.get(i);
-								if (pptr == null)
-								{
-									continue;
-								}
-								LLVMValueRef paramValue = new LLVMValueRef(pptr);
+                    // Load the variable value and return it
+                    LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext);
+                    LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load");
+                    return loaded;
+                }
+                else if (sym instanceof MethodSymbol)
+                {
+                    // This is a method group (e.g., "getPi").
+                    // This is correct. The PostfixExpression visitor will handle the call.
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym);
+                    return null;
+                }
+                else
+                {
+                    // Not a variable symbol (could be a type name, etc.)
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym);
+                    return null;
+                }
+            }
+            else
+            {
+                // --- START FIX ---
+                // Fallback: check scope-aware lookup by text
+                LLVMValueRef alloca = lookupVariable(name);
+                // --- END FIX ---
+                if (alloca != null)
+                {
+                    Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
+                    LLVMTypeRef llvmType = typeOpt.isPresent() ? TypeConverter.toLLVMType(typeOpt.get(), moduleContext) : LLVMInt32Type();
+                    return LLVMBuildLoad2(builder, llvmType, alloca, name + ".load");
+                }
+                Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in any scope.");
+                return null;
+            }
+        }
 
-								// Try to get the parameter name from the LLVM value (may be empty if unnamed)
-								BytePointer namePtr = LLVMGetValueName(paramValue);
-								String paramName = (namePtr != null) ? namePtr.getString() : ("arg" + i);
-
-								// Determine the LLVM type for this parameter (use TypeOf or your type info)
-								LLVMTypeRef paramType = LLVMTypeOf(paramValue);
-
-								// Create an alloca in the entry block for this parameter
-								LLVMValueRef paramAlloca = createEntryBlockAlloca(currentFunction, paramName, paramType);
-
-								// Store the incoming parameter value into the alloca so the parameter behaves like a local
-								LLVMBuildStore(builder, paramValue, paramAlloca);
-
-								// Put the alloca into the namedValues map so loads will find it
-								namedValues.put(paramName, paramAlloca);
-							}
-						}
-
-						Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in namedValues. Are you missing an allocation?");
-						return null;
-					}
-
-					// Load the variable value and return it
-					LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext);
-					// Use LLVMBuildLoad2 which needs explicit type and produces proper typed value
-					LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load");
-					return loaded;
-				}
-				else
-				{
-					// Not a variable symbol (could be a type name, method group, etc.)
-					Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym);
-					return null;
-				}
-			}
-			else
-			{
-				// No symbol resolved for this primary node. As a fallback, check namedValues by text.
-				LLVMValueRef alloca = namedValues.get(name);
-				if (alloca != null)
-				{
-					// Heuristic: assume int32 if we can't find type info (but better to use semantic info)
-					// Try to obtain the Type via semanticAnalyzer.getResolvedType(ctx)
-					Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
-					LLVMTypeRef llvmType = typeOpt.isPresent() ? TypeConverter.toLLVMType(typeOpt.get(), moduleContext) : LLVMInt32Type();
-					return LLVMBuildLoad2(builder, llvmType, alloca, name + ".load");
-				}
-				Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in namedValues.");
-				return null;
-			}
-		}
-
-		// 4) other primary forms (this, null, new, etc.) - simple fallback for now
-		return visitChildren(ctx);
-	}
-
+        // 4) other primary forms (this, null, new, etc.) - simple fallback for now
+        return visitChildren(ctx);
+    }
 
 	private LLVMValueRef createEntryBlockAlloca(LLVMValueRef function, LLVMTypeRef type, String varName)
 	{

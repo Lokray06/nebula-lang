@@ -683,7 +683,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
     @Override
     public Void visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
     {
-        System.out.println("VISITING VARIABLE DECLARATION FROM THE SYMBOL TABLE BUILDER=========================================");
         // e.g. int a = 5, b = 10;
         Type varType = resolveTypeFromCtx(ctx.type());
 

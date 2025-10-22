@@ -362,6 +362,9 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             return ErrorType.INSTANCE;
         }
 
+        MethodSymbol resolvedMethod = methodOpt.get();
+        note(ctx, resolvedMethod);
+
         currentMethod = methodOpt.get();
         currentScope = currentMethod;
 
@@ -628,20 +631,19 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
     @Override
     public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
     {
-        System.out.println("=========================== VISITING VARIABLE DECLARATION FOR: " + ctx.getText() + " IN THE TYPE CHECKER");
-
-        // inside visitVariableDeclaration
         Type declaredType = resolveType(ctx.type());
-        note(ctx.type(), declaredType); // This is what the IR Visitor is expecting.
+        note(ctx.type(), declaredType);
         Type sharedInitializerType = null;
 
-// Get type of last declarator’s expression (if any)
         NebulaParser.VariableDeclaratorContext lastDecl =
                 ctx.variableDeclarator(ctx.variableDeclarator().size() - 1);
 
         if (lastDecl.expression() != null)
         {
-            sharedInitializerType = visit(lastDecl.expression());
+            // --- FIX ---
+            // Visit the initializer, telling it we EXPECT the variable's declared type.
+            // This is how `float fPi = getPi()` works.
+            sharedInitializerType = visitExpecting(lastDecl.expression(), declaredType);
         }
 
         for (var declarator : ctx.variableDeclarator())
@@ -654,8 +656,10 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
                 continue;
             }
 
+            // --- FIX ---
+            // Use visitExpecting here as well for other declarators.
             Type initializerType = declarator.expression() != null
-                    ? visit(declarator.expression())
+                    ? visitExpecting(declarator.expression(), declaredType)
                     : (sharedInitializerType != null && declarator != lastDecl ? sharedInitializerType : null);
 
             if (initializerType != null && !initializerType.isAssignableTo(declaredType))
@@ -1865,6 +1869,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
      * Cost is calculated as:
      * - 0 for an exact type match.
      * - 1 for a match requiring a widening conversion.
+     * - 2 for other conversions (e.g., boxing, implicit reference casts)
      * - Infinity if a conversion is not possible.
      */
     public int calculateArgumentMatchCost(MethodSymbol candidate, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
@@ -1875,8 +1880,11 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         for (int i = 0; i < positionalArgs.size(); i++)
         {
             Type paramType = params.get(i).getType();
-            // IMPORTANT: Visit *without* an expected type, to get the raw argument type
-            Type argType = visit(positionalArgs.get(i)); // Changed from visitExpecting
+
+            // --- FIX ---
+            // Visit the argument expression *while telling it to expect the parameter type*.
+            // This propagates context into nested calls like getPi().
+            Type argType = visitExpecting(positionalArgs.get(i), paramType);
 
             if (!argType.isAssignableTo(paramType))
             {
@@ -1894,9 +1902,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
                 cost = 1; // 2. Widening match (int -> double)
             }
 
-            // --- ADD THIS LOG ---
             Debug.logDebug("      Positional Arg " + i + ": argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", cost=" + cost);
-
             totalCost += cost;
         }
 
@@ -1905,7 +1911,10 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         {
             Optional<ParameterSymbol> paramOpt = params.stream().filter(p -> p.getName().equals(entry.getKey())).findFirst();
             Type paramType = paramOpt.get().getType();
-            Type argType = visit(entry.getValue()); // Changed from visitExpecting
+
+            // --- FIX ---
+            // Also use visitExpecting for named arguments.
+            Type argType = visitExpecting(entry.getValue(), paramType);
 
             if (!argType.isAssignableTo(paramType))
             {
@@ -1923,25 +1932,28 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
                 cost = 1;
             }
 
-            // --- ADD THIS LOG ---
             Debug.logDebug("      Named Arg '" + entry.getKey() + "': argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", cost=" + cost);
-
             totalCost += cost;
         }
         return totalCost;
     }
 
+    /**
+     * Checks if arguments are assignable to a method's parameters.
+     */
     public boolean areArgumentsAssignableTo(MethodSymbol m, List<NebulaParser.ExpressionContext> positionalArgs, Map<String, NebulaParser.ExpressionContext> namedArgs)
     {
         List<ParameterSymbol> params = m.getParameters();
 
         for (int i = 0; i < positionalArgs.size(); i++)
         {
-            Type argType = visit(positionalArgs.get(i));
             Type paramType = params.get(i).getType();
+
+            // --- FIX ---
+            // Visit the argument expression *while telling it to expect the parameter type*.
+            Type argType = visitExpecting(positionalArgs.get(i), paramType);
             boolean assignable = argType.isAssignableTo(paramType);
 
-            // --- ADD THIS LOG ---
             Debug.logDebug("      Arg " + i + ": argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", assignable=" + assignable);
 
             if (!assignable)
@@ -1960,11 +1972,13 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
                 return false;
             }
 
-            Type argType = visit(e.getValue());
             Type paramType = p.getType();
+
+            // --- FIX ---
+            // Also use visitExpecting for named arguments.
+            Type argType = visitExpecting(e.getValue(), paramType);
             boolean assignable = argType.isAssignableTo(paramType);
 
-            // --- ADD THIS LOG ---
             Debug.logDebug("      Named Arg '" + e.getKey() + "': argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", assignable=" + assignable);
 
             if (!assignable)
@@ -2123,5 +2137,13 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
                 note(ctx, ErrorType.INSTANCE);
             }
         }
+    }
+
+    /**
+     * Provides access to the contextual expected type for the overload resolution logic.
+     */
+    public Type getExpectedType()
+    {
+        return expectedType;
     }
 }
