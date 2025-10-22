@@ -464,6 +464,92 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 	}
 
+    private LLVMValueRef visitIfStatementRecursive(NebulaParser.IfStatementContext ctx, LLVMBasicBlockRef finalMergeBlock)
+    {
+        LLVMValueRef function = currentFunction;
+
+        // 1. Visit the condition
+        LLVMValueRef conditionValue = visit(ctx.expression());
+        if (conditionValue == null)
+        {
+            Debug.logError("IR Error: Failed to generate IR for if condition: " + ctx.expression().getText());
+            return null;
+        }
+        LLVMValueRef finalCondition = TypeConverter.toBoolean(conditionValue, ctx.expression(), moduleContext, builder);
+
+        // 2. Create the blocks for this IF
+        LLVMBasicBlockRef thenBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "if.then");
+
+        // Retrieve the optional else statement (if it exists)
+        NebulaParser.StatementContext elseStmt = ctx.statement().size() > 1 ? ctx.statement(1) : null;
+
+        if (elseStmt != null && elseStmt.ifStatement() != null)
+        {
+            // This is an 'else if'. The false branch jumps to the next condition check.
+            LLVMBasicBlockRef nextCheckBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "else.if.cond");
+            LLVMBuildCondBr(builder, finalCondition, thenBlock, nextCheckBlock);
+
+            // Position builder for the recursive call
+            LLVMPositionBuilderAtEnd(builder, nextCheckBlock);
+            // Recursively call with the same finalMergeBlock
+            visitIfStatementRecursive(elseStmt.ifStatement(), finalMergeBlock);
+        }
+        else if (elseStmt != null)
+        {
+            // This is a final 'else' block. The false branch jumps directly to the 'else' body.
+            LLVMBasicBlockRef elseBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "if.else");
+            LLVMBuildCondBr(builder, finalCondition, thenBlock, elseBlock);
+
+            // Populate 'else' block
+            LLVMPositionBuilderAtEnd(builder, elseBlock);
+            visit(elseStmt);
+
+            // If 'else' block didn't terminate, branch to the final merge block
+            if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null)
+            {
+                LLVMBuildBr(builder, finalMergeBlock);
+            }
+        }
+        else
+        {
+            // Simple 'if'. The false branch jumps directly to the final merge block.
+            LLVMBuildCondBr(builder, finalCondition, thenBlock, finalMergeBlock);
+        }
+
+        // 3. Populate 'then' block
+        LLVMPositionBuilderAtEnd(builder, thenBlock);
+        visit(ctx.statement(0)); // ✅ Correct: the "then" statement is always statement(0)
+
+        // If 'then' block didn't terminate, branch to the final merge block
+        if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null)
+        {
+            LLVMBuildBr(builder, finalMergeBlock);
+        }
+
+        return null;
+    }
+
+
+    /**
+     * Public visitor entry point for IfStatement. Sets up the final merge block
+     * and initiates the recursive chain.
+     */
+    @Override
+    public LLVMValueRef visitIfStatement(NebulaParser.IfStatementContext ctx)
+    {
+        LLVMValueRef function = currentFunction;
+        // 1. Create the final block where the entire chain converges
+        LLVMBasicBlockRef mergeBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "if.merge");
+
+        // 2. Start the recursive processing of the if-else if chain
+        visitIfStatementRecursive(ctx, mergeBlock);
+
+        // 3. Position builder at the final merge block
+        LLVMPositionBuilderAtEnd(builder, mergeBlock);
+
+        return null;
+    }
+
     // New method to implement variable declaration IR generation
     @Override
     public LLVMValueRef visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
@@ -544,7 +630,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
     @Override
     public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
     {
-        System.out.println("======================VISITING LITERAL FOR: " + ctx.getText() + " OF TYPE " + ctx.FLOAT_LITERAL());
         // Strings: keep your existing implementation (unchanged).
         if (ctx.STRING_LITERAL() != null)
         {

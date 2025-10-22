@@ -2,8 +2,10 @@
 package org.lokray.codegen;
 
 import org.bytedeco.llvm.LLVM.*;
+import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.type.PrimitiveType; // Import PrimitiveType
 import org.lokray.semantic.type.Type;
+import org.lokray.util.Debug;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -140,5 +142,49 @@ public class TypeConverter
     private static LLVMTypeRef LLVMDoubleTypeInContext(LLVMContextRef ctx)
     {
         return LLVMDoubleType();
+    }
+
+    /**
+     * Helper to convert a non-boolean LLVMValueRef into an i1 boolean value.
+     * This is crucial for LLVMBuildCondBr.
+     */
+    public static LLVMValueRef toBoolean(LLVMValueRef value, NebulaParser.ExpressionContext ctx, LLVMContextRef moduleContext, LLVMBuilderRef builder)
+    {
+        LLVMTypeRef valueType = LLVMTypeOf(value);
+        LLVMTypeRef i1Type = LLVMInt1TypeInContext(moduleContext);
+
+        if (LLVMGetTypeKind(valueType) == LLVMIntegerTypeKind)
+        {
+            if (LLVMGetIntTypeWidth(valueType) == 1)
+            {
+                // Already i1 (boolean), return it directly
+                return value;
+            }
+            else
+            {
+                // Integer (i32, i64, etc.) -> i1 by comparing to zero (i.e., val != 0)
+                LLVMValueRef zero = LLVMConstInt(valueType, 0, 0);
+                return LLVMBuildICmp(builder, LLVMIntNE, value, zero, "tobool.int");
+            }
+        }
+        else if (LLVMGetTypeKind(valueType) == LLVMFloatTypeKind || LLVMGetTypeKind(valueType) == LLVMDoubleTypeKind)
+        {
+            // Floating point -> i1 by comparing to zero (i.e., val != 0.0)
+            LLVMValueRef zero = LLVMConstNull(valueType);
+            return LLVMBuildFCmp(builder, LLVMRealONE, value, zero, "tobool.fp");
+        }
+        else if (LLVMGetTypeKind(valueType) == LLVMPointerTypeKind)
+        {
+            // Pointers -> i1 by comparing to null (i.e., ptr != null)
+            LLVMValueRef nullPtr = LLVMConstNull(valueType);
+            return LLVMBuildICmp(builder, LLVMIntNE, value, nullPtr, "tobool.ptr");
+        }
+        else
+        {
+            // Fallback for other types; log error if type is unexpected
+            Debug.logWarning("IR Warning: Conditional expression resulted in unhandled type kind: " + LLVMGetTypeKind(valueType) + " in " + ctx.getText());
+            // Treat it as true (safest default for a potential error)
+            return LLVMConstInt(i1Type, 1, 0);
+        }
     }
 }
