@@ -48,10 +48,24 @@ public class MethodSymbol extends Scope implements Symbol
 
             for (Type paramType : this.getParameterTypes())
             {
-                mangled.append("__").append(paramType.getName());
+                if(paramType.getName().equalsIgnoreCase("String"))
+                {
+                    mangled.append("__").append("string");
+                }
+                else
+                {
+                    mangled.append("__").append(paramType.getName());
+                }
             }
 
-            mangled.append("___").append(this.getType().getName());
+            if(this.getType().getName().equalsIgnoreCase("String"))
+            {
+                mangled.append("___").append("string");
+            }
+            else
+            {
+                mangled.append("___").append(this.getType().getName());
+            }
 
             return mangled.toString();
         }
@@ -66,7 +80,7 @@ public class MethodSymbol extends Scope implements Symbol
 
     public String getMangledName()
     {
-        return  this.mangledName;
+        return this.mangledName;
     }
 
 	@Override
