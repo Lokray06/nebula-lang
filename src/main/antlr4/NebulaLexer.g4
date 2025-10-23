@@ -172,16 +172,24 @@ BIT_L_SHIFT_COMP: '<<=';
 BIT_R_SHIFT_COMP: '>>=';
 
 // ---------------------- LITERALS ----------------------
+fragment SUFFIX
+    : [bBsSlLuU]? [bBsSlLuU]?
+    ;
+
 HEX_LITERAL
-    :   '-'? '0' [xX] HEX_DIGITS [Ll]?
+    : '-'? '0' [xX] HEX_DIGITS SUFFIX
+    ;
+
+BIN_LITERAL
+    : '-'? '0' [bB] [01_]+ SUFFIX
     ;
 
 LONG_LITERAL
-    :   '-'? DECIMAL_DIGITS [Ll]
+    : '-'? DECIMAL_DIGITS SUFFIX
     ;
 
 INTEGER_LITERAL
-    :   '-'? DECIMAL_DIGITS
+    : '-'? DECIMAL_DIGITS SUFFIX
     ;
 
 fragment EXPONENT: [eE] [+-]? DECIMAL_DIGITS;
@@ -190,7 +198,7 @@ FLOAT_LITERAL
     :   '-'? (
             DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
         |   '.' DECIMAL_DIGITS EXPONENT?
-        |   DECIMAL_DIGITS EXPONENT
+        |   DECIMAL_DIGITS? EXPONENT?
         ) [fF]
     ;
 

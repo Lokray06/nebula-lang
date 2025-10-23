@@ -107,12 +107,30 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);
 		namedValues.clear(); // Clear namedValues for the function's scope
 
-		// ** Process parameters here if applicable **
-		// (You would add code to create allocas and store parameter values here)
-		// For now, this is a placeholder.
+        // 4. Process parameters: Create allocas and store incoming arguments
+        PointerPointer<LLVMValueRef> params = new PointerPointer<>(methodSymbol.getParameterTypes().size());
+        LLVMGetParams(function, params);
 
-		// 5. Visit the body
-		visit(ctx.block());
+        for (int i = 0; i < methodSymbol.getParameterTypes().size(); i++)
+        {
+            Type paramNebulaType = methodSymbol.getParameterTypes().get(i);
+            String paramName = methodSymbol.getParameters().get(i).getName(); // Assuming parameter names are available
+            LLVMTypeRef paramLLVMType = TypeConverter.toLLVMType(paramNebulaType, moduleContext);
+            LLVMValueRef incomingValue = params.get(LLVMValueRef.class, i);
+
+            // 1. Create alloca in the entry block
+            LLVMValueRef alloca = createEntryBlockAlloca(function, paramLLVMType, paramName);
+
+            // 2. Store the incoming argument value into the alloca
+            LLVMBuildStore(builder, incomingValue, alloca);
+
+            // 3. Register the alloca in the current scope for lookups
+            namedValues.put(paramName, alloca);
+            addVariableToScope(paramName, alloca);
+        }
+
+        // 5. Visit the body
+        visit(ctx.block());
 
 		// 6. Finalize (Add implicit return for non-terminated blocks/void functions)
 		LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(function);
@@ -726,38 +744,56 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			String varName = declarator.ID().getText();
 			LLVMValueRef varAlloca = createEntryBlockAlloca(currentFunction, varLLVMType, varName);
 
-			if (declarator.expression() != null)
-			{
-				LLVMValueRef initVal = visit(declarator.expression());
-				if (initVal == null)
-				{
-					continue;
-				}
+            if (declarator.expression() != null)
+            {
+                LLVMValueRef initVal = visit(declarator.expression());
+                if (initVal == null)
+                {
+                    continue;
+                }
 
-				LLVMTypeRef initType = LLVMTypeOf(initVal);
+                LLVMTypeRef initType = LLVMTypeOf(initVal);
 
-				// 🔧 Automatically extend/truncate if sizes differ
-				if (LLVMGetTypeKind(initType) == LLVMIntegerTypeKind &&
-						LLVMGetTypeKind(varLLVMType) == LLVMIntegerTypeKind)
-				{
-					int fromBits = LLVMGetIntTypeWidth(initType);
-					int toBits = LLVMGetIntTypeWidth(varLLVMType);
-					boolean isUnsigned = nebulaTypeOpt.get().getName().startsWith("u");
+                // 🔧 Automatically extend/truncate/convert if sizes/types differ
+                if (LLVMGetTypeKind(initType) == LLVMIntegerTypeKind &&
+                        LLVMGetTypeKind(varLLVMType) == LLVMIntegerTypeKind)
+                {
+                    int fromBits = LLVMGetIntTypeWidth(initType);
+                    int toBits = LLVMGetIntTypeWidth(varLLVMType);
+                    boolean isUnsigned = nebulaTypeOpt.get().getName().startsWith("u");
 
-					if (toBits > fromBits)
-					{
-						initVal = isUnsigned
-								? LLVMBuildZExt(builder, initVal, varLLVMType, "zext_store")
-								: LLVMBuildSExt(builder, initVal, varLLVMType, "sext_store");
-					}
-					else if (toBits < fromBits)
-					{
-						initVal = LLVMBuildTrunc(builder, initVal, varLLVMType, "trunc_store");
-					}
-				}
+                    if (toBits > fromBits)
+                    {
+                        initVal = isUnsigned
+                                ? LLVMBuildZExt(builder, initVal, varLLVMType, "zext_store")
+                                : LLVMBuildSExt(builder, initVal, varLLVMType, "sext_store");
+                    }
+                    else if (toBits < fromBits)
+                    {
+                        initVal = LLVMBuildTrunc(builder, initVal, varLLVMType, "trunc_store");
+                    }
+                }
+                // 💡 NEW BLOCK FOR FLOATING POINT CONVERSION
+                else if ((LLVMGetTypeKind(initType) == LLVMFloatTypeKind || LLVMGetTypeKind(initType) == LLVMDoubleTypeKind) &&
+                        (LLVMGetTypeKind(varLLVMType) == LLVMFloatTypeKind || LLVMGetTypeKind(varLLVMType) == LLVMDoubleTypeKind))
+                {
+                    // Promotion: float (32-bit) -> double (64-bit)
+                    if (LLVMGetTypeKind(varLLVMType) == LLVMDoubleTypeKind &&
+                            LLVMGetTypeKind(initType) == LLVMFloatTypeKind)
+                    {
+                        initVal = LLVMBuildFPExt(builder, initVal, varLLVMType, "fpext_store");
+                    }
+                    // Truncation: double (64-bit) -> float (32-bit)
+                    else if (LLVMGetTypeKind(varLLVMType) == LLVMFloatTypeKind &&
+                            LLVMGetTypeKind(initType) == LLVMDoubleTypeKind)
+                    {
+                        initVal = LLVMBuildFPTrunc(builder, initVal, varLLVMType, "fptrunc_store");
+                    }
+                }
+                // 💡 END NEW BLOCK
 
-				LLVMBuildStore(builder, initVal, varAlloca);
-			}
+                LLVMBuildStore(builder, initVal, varAlloca);
+            }
 
 			addVariableToScope(varName, varAlloca);
 			namedValues.put(varName, varAlloca);
@@ -929,16 +965,18 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	}
 
 
-	@Override
-	public LLVMValueRef visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
-	{
-		if (ctx.expression() != null)
-		{
-			LLVMValueRef retVal = visit(ctx.expression());
-			return LLVMBuildRet(builder, retVal);
-		}
-		return LLVMBuildRet(builder, LLVMConstInt(LLVMInt32Type(), 0, 0));
-	}
+    @Override
+    public LLVMValueRef visitReturnStatement(NebulaParser.ReturnStatementContext ctx)
+    {
+        if (ctx.expression() != null)
+        {
+            LLVMValueRef retVal = visit(ctx.expression());
+            return LLVMBuildRet(builder, retVal); // This should be LLVMBuildRet for the correct type!
+        }
+        // This default return for functions without an expression is likely wrong
+        // for non-void functions, but should not be reached here.
+        return LLVMBuildRet(builder, LLVMConstInt(LLVMInt32Type(), 0, 0));
+    }
 
 	private String canonicalTypeName(Type t)
 	{
@@ -1048,6 +1086,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 			// 2. Prepare arguments
 			List<LLVMValueRef> args = new ArrayList<>();
+            List<Type> expectedParamTypes = methodSymbol.getParameterTypes(); // <--- Get expected types
 			// Find the ArgumentListContext child node
 			NebulaParser.ArgumentListContext argListCtx = null;
 			for (int i = 0; i < ctx.getChildCount(); i++)
@@ -1059,14 +1098,41 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				}
 			}
 
-			if (argListCtx != null)
-			{
-				Debug.logWarning("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
-				for (NebulaParser.ExpressionContext exprCtx : argListCtx.expression())
-				{
-					args.add(visit(exprCtx));
-				}
-			}
+            if (argListCtx != null)
+            {
+                Debug.logWarning("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
+                for (int i = 0; i < argListCtx.expression().size(); i++)
+                {
+                    NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
+                    LLVMValueRef argValue = visit(exprCtx);
+
+                    // --- NEW CONVERSION LOGIC ---
+                    if (i < expectedParamTypes.size() && argValue != null)
+                    {
+                        Type targetType = expectedParamTypes.get(i);
+                        LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext);
+                        LLVMTypeRef actualLLVMType = LLVMTypeOf(argValue);
+
+                        // Check if argument needs promotion/conversion (e.g., int to double)
+                        if (!actualLLVMType.equals(targetLLVMType))
+                        {
+                            // This is a common conversion utility, assuming you have one or build one.
+                            // For int-to-double:
+                            if (LLVMGetTypeKind(actualLLVMType) == LLVMIntegerTypeKind &&
+                                    LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind)
+                            {
+                                // Convert Signed Integer to Floating Point
+                                argValue = LLVMBuildSIToFP(builder, argValue, targetLLVMType, "arg_sitofp");
+                            }
+                            // Add logic for int->float, float->double (fpext) if needed,
+                            // but int->double fixes this specific case.
+                        }
+                    }
+                    // --- END CONVERSION LOGIC ---
+
+                    args.add(argValue);
+                }
+            }
 
 			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
 			for (int i = 0; i < args.size(); i++)
@@ -1088,113 +1154,102 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 	}
 
-	@Override
-	public LLVMValueRef visitCastExpression(NebulaParser.CastExpressionContext ctx)
-	{
-		// 1. Visit the inner expression
-		LLVMValueRef originalValue = visit(ctx.unaryExpression());
-		if (originalValue == null)
-		{
-			return null;
-		}
+    @Override
+    public LLVMValueRef visitCastExpression(NebulaParser.CastExpressionContext ctx)
+    {
+        LLVMValueRef originalValue = visit(ctx.unaryExpression());
+        if (originalValue == null)
+            return null;
 
-		// 2. Get Nebula types
-		Optional<Type> originalNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.unaryExpression());
-		Optional<Type> targetNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx);
-		System.out.println("Trying cast on " + ctx.getText() + " resolved as:" + originalNebulaTypeOpt.get().getName() + " " + targetNebulaTypeOpt.get().getName());
+        Optional<Type> originalNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.unaryExpression());
+        Optional<Type> targetNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx);
 
-		if (originalNebulaTypeOpt.isEmpty() || targetNebulaTypeOpt.isEmpty())
-		{
-			Debug.logError("IR Error: Could not resolve types for cast expression: " + ctx.getText());
-			return null;
-		}
-		Type originalType = originalNebulaTypeOpt.get();
-		Type targetType = targetNebulaTypeOpt.get();
+        if (originalNebulaTypeOpt.isEmpty() || targetNebulaTypeOpt.isEmpty())
+        {
+            Debug.logError("IR Error: Could not resolve types for cast expression: " + ctx.getText());
+            return null;
+        }
 
-		// 3. Get LLVM types
-		LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext);
-		LLVMTypeRef originalLLVMType = LLVMTypeOf(originalValue);
+        Type originalType = originalNebulaTypeOpt.get();
+        Type targetType = targetNebulaTypeOpt.get();
 
-		// 4. No-op check
-		if (originalLLVMType.equals(targetLLVMType))
-		{
-			return originalValue;
-		}
+        LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext);
+        LLVMTypeRef originalLLVMType = LLVMTypeOf(originalValue);
 
-		// 5. Determine cast instruction based on Nebula types for signedness
-		boolean targetIsNumeric = targetType.isNumeric();
-		boolean originalIsNumeric = originalType.isNumeric();
-		boolean targetIsUnsigned = targetType.getName().startsWith("u");
-		boolean originalIsUnsigned = originalType.getName().startsWith("u");
+        if (originalLLVMType.equals(targetLLVMType))
+            return originalValue;
 
-		if (targetIsNumeric && originalIsNumeric)
-		{
-			int targetBits = 0;
-			int originalBits = 0;
-			if (LLVMGetTypeKind(targetLLVMType) == LLVMIntegerTypeKind)
-			{
-				targetBits = LLVMGetIntTypeWidth(targetLLVMType);
-			}
-			if (LLVMGetTypeKind(originalLLVMType) == LLVMIntegerTypeKind)
-			{
-				originalBits = LLVMGetIntTypeWidth(originalLLVMType);
-			}
+        boolean targetIsNumeric = targetType.isNumeric();
+        boolean originalIsNumeric = originalType.isNumeric();
+        boolean targetIsUnsigned = targetType.getName().startsWith("u");
+        boolean originalIsUnsigned = originalType.getName().startsWith("u");
 
-			// Int to Int
-			if (targetBits > 0 && originalBits > 0)
-			{
-				if (targetBits < originalBits)
-				{
-					return LLVMBuildTrunc(builder, originalValue, targetLLVMType, "trunc");
-				}
-				else if (targetBits > originalBits)
-				{
-					return originalIsUnsigned ?
-							LLVMBuildZExt(builder, originalValue, targetLLVMType, "zext") :
-							LLVMBuildSExt(builder, originalValue, targetLLVMType, "sext");
-				}
-				// else same bits -> fallthrough to bitcast if needed (e.g., int<->uint)
-				// LLVM treats i32 the same regardless of signedness attribute in source lang
-				// A bitcast might be needed if you represent pointers differently, but for int<->uint of same size, it's often a no-op value-wise
-				return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "intcast");
-			}
+        if (targetIsNumeric && originalIsNumeric)
+        {
+            int targetBits = (LLVMGetTypeKind(targetLLVMType) == LLVMIntegerTypeKind)
+                    ? LLVMGetIntTypeWidth(targetLLVMType) : 0;
+            int originalBits = (LLVMGetTypeKind(originalLLVMType) == LLVMIntegerTypeKind)
+                    ? LLVMGetIntTypeWidth(originalLLVMType) : 0;
 
-			// Float to Float
-			boolean targetIsFloatOrDouble = (LLVMGetTypeKind(targetLLVMType) == LLVMFloatTypeKind || LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind);
-			boolean originalIsFloatOrDouble = (LLVMGetTypeKind(originalLLVMType) == LLVMFloatTypeKind || LLVMGetTypeKind(originalLLVMType) == LLVMDoubleTypeKind);
-			if (targetIsFloatOrDouble && originalIsFloatOrDouble)
-			{
-				if (LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind && LLVMGetTypeKind(originalLLVMType) == LLVMFloatTypeKind)
-				{
-					return LLVMBuildFPExt(builder, originalValue, targetLLVMType, "fpext");
-				}
-				else if (LLVMGetTypeKind(targetLLVMType) == LLVMFloatTypeKind && LLVMGetTypeKind(originalLLVMType) == LLVMDoubleTypeKind)
-				{
-					return LLVMBuildFPTrunc(builder, originalValue, targetLLVMType, "fptrunc");
-				}
-			}
+            boolean targetIsFloat = (LLVMGetTypeKind(targetLLVMType) == LLVMFloatTypeKind
+                    || LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind);
+            boolean originalIsFloat = (LLVMGetTypeKind(originalLLVMType) == LLVMFloatTypeKind
+                    || LLVMGetTypeKind(originalLLVMType) == LLVMDoubleTypeKind);
 
-			// Int to Float
-			if (targetIsFloatOrDouble && originalBits > 0)
-			{
-				return originalIsUnsigned ?
-						LLVMBuildUIToFP(builder, originalValue, targetLLVMType, "uitofp") :
-						LLVMBuildSIToFP(builder, originalValue, targetLLVMType, "sitofp");
-			}
+            // ----- int -> int -----
+            if (targetBits > 0 && originalBits > 0)
+            {
+                if (targetBits < originalBits)
+                    return LLVMBuildTrunc(builder, originalValue, targetLLVMType, "trunc");
+                else if (targetBits > originalBits)
+                    return originalIsUnsigned
+                            ? LLVMBuildZExt(builder, originalValue, targetLLVMType, "zext")
+                            : LLVMBuildSExt(builder, originalValue, targetLLVMType, "sext");
+                return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "intcast");
+            }
 
-			// Float to Int
-			if (targetBits > 0 && originalIsFloatOrDouble)
-			{
-				return targetIsUnsigned ?
-						LLVMBuildFPToUI(builder, originalValue, targetLLVMType, "fptoui") :
-						LLVMBuildFPToSI(builder, originalValue, targetLLVMType, "fptosi");
-			}
-		}
+            // ----- float -> float -----
+            if (targetIsFloat && originalIsFloat)
+            {
+                if (LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind &&
+                        LLVMGetTypeKind(originalLLVMType) == LLVMFloatTypeKind)
+                    return LLVMBuildFPExt(builder, originalValue, targetLLVMType, "fpext");
+                else if (LLVMGetTypeKind(targetLLVMType) == LLVMFloatTypeKind &&
+                        LLVMGetTypeKind(originalLLVMType) == LLVMDoubleTypeKind)
+                    return LLVMBuildFPTrunc(builder, originalValue, targetLLVMType, "fptrunc");
+            }
 
-		// Fallback (e.g., pointer casts, reference type casts if you add them)
-		Debug.logWarning("IR: Using fallback LLVMBuildBitCast for cast: " + ctx.getText());
-		return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "bitcast");
-	}
+            // ----- int -> float -----
+            if (targetIsFloat && originalBits > 0)
+            {
+                return originalIsUnsigned
+                        ? LLVMBuildUIToFP(builder, originalValue, targetLLVMType, "uitofp")
+                        : LLVMBuildSIToFP(builder, originalValue, targetLLVMType, "sitofp");
+            }
+
+            // ----- float -> int / uint -----
+            if (targetBits > 0 && originalIsFloat)
+            {
+                // 1. convert to a wide signed int
+                LLVMTypeRef wideInt = LLVMInt64TypeInContext(LLVMGetGlobalContext());
+                LLVMValueRef wide = LLVMBuildFPToSI(builder, originalValue, wideInt, "fptosi_wide");
+
+                // 2. mask if target is unsigned to emulate modulo 2^N
+                if (targetIsUnsigned)
+                {
+                    long mask = (targetBits == 64) ? -1L : ((1L << targetBits) - 1L);
+                    LLVMValueRef maskConst = LLVMConstInt(wideInt, mask, 0);
+                    wide = LLVMBuildAnd(builder, wide, maskConst, "mask_low_bits");
+                }
+
+                // 3. truncate to final size
+                return LLVMBuildTrunc(builder, wide, targetLLVMType, "trunc_to_target");
+            }
+        }
+
+        Debug.logWarning("IR: Using fallback LLVMBuildBitCast for cast: " + ctx.getText());
+        return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "bitcast");
+    }
 
 	@Override
 	public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
@@ -1214,7 +1269,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		// 3) Identifier usage
 		if (ctx.ID() != null)
 		{
-			System.out.println("Visiting primary expression for ID:" + ctx.ID().getText());
+			Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText());
 			String name = ctx.ID().getText();
 			Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 
@@ -1224,7 +1279,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 				if (sym instanceof VariableSymbol varSym)
 				{
-					System.out.println("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
+					Debug.logDebug("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
 
 					// --- START FIX ---
 					// Find the alloca for this variable using the scope-aware lookup
@@ -1280,6 +1335,134 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		// 4) other primary forms (this, null, new, etc.) - simple fallback for now
 		return visitChildren(ctx);
 	}
+    @Override
+    public LLVMValueRef visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
+    {
+        if (ctx.powerExpression().size() > 1)
+        {
+            LLVMValueRef leftVal = visit(ctx.powerExpression(0));
+            LLVMValueRef rightVal = visit(ctx.powerExpression(1));
+
+            if (leftVal == null || rightVal == null)
+            {
+                return null;
+            }
+
+            // 1. Get the final result type (determined by the type checker)
+            Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+            if (resultTypeOpt.isEmpty())
+            {
+                Debug.logError("IR: Multiplicative expression result type not found.");
+                return null;
+            }
+            LLVMTypeRef resultLLVMType = TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+            // 2. Cast operands to the result type
+            LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "mult_lhs");
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "mult_rhs");
+
+            LLVMTypeRef finalType = LLVMTypeOf(leftCasted); // Now should be the common widest type
+
+            // 3. Select the operation based on the type
+            if (LLVMGetTypeKind(finalType) == LLVMDoubleTypeKind || LLVMGetTypeKind(finalType) == LLVMFloatTypeKind)
+            {
+                // Floating-point arithmetic
+                if (ctx.MUL_OP() != null)
+                {
+                    return LLVMBuildFMul(builder, leftCasted, rightCasted, "fmul_tmp");
+                }
+                else if (ctx.DIV_OP() != null)
+                {
+                    return LLVMBuildFDiv(builder, leftCasted, rightCasted, "fdiv_tmp");
+                }
+                else if (ctx.MOD_OP() != null)
+                {
+                    // Note: FRem is floating-point remainder (modulus)
+                    return LLVMBuildFRem(builder, leftCasted, rightCasted, "frem_tmp");
+                }
+            }
+            else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind)
+            {
+                // Integer arithmetic (assuming signed for Div and Rem)
+                if (ctx.MUL_OP() != null)
+                {
+                    return LLVMBuildMul(builder, leftCasted, rightCasted, "mul_tmp");
+                }
+                else if (ctx.DIV_OP() != null)
+                {
+                    return LLVMBuildSDiv(builder, leftCasted, rightCasted, "sdiv_tmp"); // Signed division
+                }
+                else if (ctx.MOD_OP() != null)
+                {
+                    return LLVMBuildSRem(builder, leftCasted, rightCasted, "srem_tmp"); // Signed remainder
+                }
+            }
+
+            Debug.logError("IR: Unsupported types for multiplicative operation.");
+            return null;
+        }
+        return visitChildren(ctx);
+    }
+
+    @Override
+    public LLVMValueRef visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
+    {
+        if (ctx.multiplicativeExpression().size() > 1)
+        {
+            LLVMValueRef leftVal = visit(ctx.multiplicativeExpression(0));
+            LLVMValueRef rightVal = visit(ctx.multiplicativeExpression(1));
+
+            if (leftVal == null || rightVal == null)
+            {
+                return null;
+            }
+
+            // 1. Get the final result type (determined by the type checker)
+            Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+            if (resultTypeOpt.isEmpty())
+            {
+                Debug.logError("IR: Additive expression result type not found.");
+                return null;
+            }
+            LLVMTypeRef resultLLVMType = TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+            // 2. Cast operands to the result type
+            LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "add_lhs");
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "add_rhs");
+
+            LLVMTypeRef finalType = LLVMTypeOf(leftCasted);
+
+            // 3. Select the operation based on the type
+            if (LLVMGetTypeKind(finalType) == LLVMDoubleTypeKind || LLVMGetTypeKind(finalType) == LLVMFloatTypeKind)
+            {
+                // Floating-point arithmetic
+                if (ctx.ADD_OP() != null)
+                {
+                    return LLVMBuildFAdd(builder, leftCasted, rightCasted, "fadd_tmp");
+                }
+                else if (ctx.SUB_OP() != null)
+                {
+                    return LLVMBuildFSub(builder, leftCasted, rightCasted, "fsub_tmp");
+                }
+            }
+            else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind)
+            {
+                // Integer arithmetic
+                if (ctx.ADD_OP() != null)
+                {
+                    return LLVMBuildAdd(builder, leftCasted, rightCasted, "add_tmp");
+                }
+                else if (ctx.SUB_OP() != null)
+                {
+                    return LLVMBuildSub(builder, leftCasted, rightCasted, "sub_tmp");
+                }
+            }
+
+            Debug.logError("IR: Unsupported types for additive operation.");
+            return null;
+        }
+        return visitChildren(ctx);
+    }
 
 	private LLVMValueRef createEntryBlockAlloca(LLVMValueRef function, LLVMTypeRef type, String varName)
 	{
@@ -1398,4 +1581,53 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 		return namedValues.get(name); // fallback for global or top-level vars
 	}
+
+    private LLVMValueRef buildCast(LLVMBuilderRef builder, LLVMValueRef sourceValue, LLVMTypeRef targetType, String name)
+    {
+        LLVMTypeRef sourceType = LLVMTypeOf(sourceValue);
+
+        if (sourceType.equals(targetType)) {
+            return sourceValue; // No cast needed
+        }
+
+        int sourceKind = LLVMGetTypeKind(sourceType);
+        int targetKind = LLVMGetTypeKind(targetType);
+
+        // 1. Integer to Floating Point (SIToFP - assuming signed ints)
+        if (sourceKind == LLVMIntegerTypeKind &&
+                (targetKind == LLVMFloatTypeKind || targetKind == LLVMDoubleTypeKind))
+        {
+            return LLVMBuildSIToFP(builder, sourceValue, targetType, name + ".sitofp");
+        }
+
+        // 2. Floating Point Extension (float -> double)
+        if (sourceKind == LLVMFloatTypeKind && targetKind == LLVMDoubleTypeKind)
+        {
+            return LLVMBuildFPExt(builder, sourceValue, targetType, name + ".fpext");
+        }
+
+        // 3. Floating Point Truncation (double -> float)
+        if (sourceKind == LLVMDoubleTypeKind && targetKind == LLVMFloatTypeKind)
+        {
+            return LLVMBuildFPTrunc(builder, sourceValue, targetType, name + ".fptrunc");
+        }
+
+        // 4. Integer to Integer (SExt/ZExt/Trunc)
+        if (sourceKind == LLVMIntegerTypeKind && targetKind == LLVMIntegerTypeKind)
+        {
+            int sourceBits = LLVMGetIntTypeWidth(sourceType);
+            int targetBits = LLVMGetIntTypeWidth(targetType);
+
+            if (targetBits > sourceBits) {
+                // Assuming signed extension for arithmetic
+                return LLVMBuildSExt(builder, sourceValue, targetType, name + ".sext");
+            } else if (targetBits < sourceBits) {
+                return LLVMBuildTrunc(builder, sourceValue, targetType, name + ".trunc");
+            }
+        }
+
+        // Fallback for other complex or unsupported cases
+        Debug.logWarning("IR: Attempted unsupported numeric cast from " + LLVMPrintTypeToString(sourceType) + " to " + LLVMPrintTypeToString(targetType));
+        return sourceValue;
+    }
 }

@@ -1992,9 +1992,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
     private void resolveIntegerLiteralSemantics(NebulaParser.LiteralContext ctx)
     {
         String raw = null;
-        boolean hasLongSuffix = false;
-        boolean hasUnsignedSuffix = false; // Added
-        int base = 10;
 
         if (ctx.LONG_LITERAL() != null)
         {
@@ -2013,46 +2010,81 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             return; // Not an integer-like literal
         }
 
-        String originalText = raw; // For error messages
+        String originalText = raw; // For diagnostics
 
-        // Handle compound suffixes like 'ul' or 'Lu'
-        if (raw.endsWith("ul") || raw.endsWith("Ul") || raw.endsWith("uL") || raw.endsWith("UL") ||
-                raw.endsWith("lu") || raw.endsWith("Lu") || raw.endsWith("lU") || raw.endsWith("LU"))
+        // --- Separate sign ---
+        boolean negative = false;
+        if (raw.startsWith("-"))
         {
-            hasLongSuffix = true;
-            hasUnsignedSuffix = true;
-            raw = raw.substring(0, raw.length() - 2);
-        }
-        else if (raw.endsWith("l") || raw.endsWith("L"))
-        {
-            hasLongSuffix = true;
-            raw = raw.substring(0, raw.length() - 1);
-        }
-        else if (raw.endsWith("u") || raw.endsWith("U")) // Check for 'u' AFTER 'ul'/'lu'
-        {
-            hasUnsignedSuffix = true;
-            raw = raw.substring(0, raw.length() - 1);
+            negative = true;
+            raw = raw.substring(1);
         }
 
+        // --- Extract suffix (trailing letters) in any order, case-insensitive ---
+        int suffixStart = raw.length();
+        while (suffixStart > 0 && Character.isLetter(raw.charAt(suffixStart - 1)))
+        {
+            suffixStart--;
+        }
+        String suffix = raw.substring(suffixStart);       // may be empty
+        String numericPart = raw.substring(0, suffixStart);
 
-        if (raw.startsWith("0x") || raw.startsWith("0X"))
+        String suffixLower = suffix.toLowerCase(Locale.ROOT);
+
+        // allowed letters: b, s, l, u
+        boolean hasByte = suffixLower.indexOf('b') >= 0;
+        boolean hasShort = suffixLower.indexOf('s') >= 0;
+        boolean hasLong = suffixLower.indexOf('l') >= 0;
+        boolean hasUnsigned = suffixLower.indexOf('u') >= 0;
+
+        // Validate suffix characters (reject unknown letters)
+        for (int i = 0; i < suffixLower.length(); ++i)
+        {
+            char c = suffixLower.charAt(i);
+            if (c != 'b' && c != 's' && c != 'l' && c != 'u')
+            {
+                logError(ctx.start, "Unknown integer literal suffix '" + c + "' in: " + originalText);
+                note(ctx, ErrorType.INSTANCE);
+                return;
+            }
+        }
+
+        // Conflicting small-size specifiers
+        if (hasByte && hasShort)
+        {
+            logError(ctx.start, "Conflicting integer literal size suffixes 'b' and 's' in: " + originalText);
+            note(ctx, ErrorType.INSTANCE);
+            return;
+        }
+
+        // Remove underscores from numeric part for parsing
+        numericPart = numericPart.replace("_", "");
+
+        int base = 10;
+        if (numericPart.startsWith("0x") || numericPart.startsWith("0X"))
         {
             base = 16;
-            raw = raw.substring(2);
+            numericPart = numericPart.substring(2);
         }
-        else if (raw.startsWith("0b") || raw.startsWith("0B"))
+        else if (numericPart.startsWith("0b") || numericPart.startsWith("0B"))
         {
             base = 2;
-            raw = raw.substring(2);
+            numericPart = numericPart.substring(2);
         }
 
-        // Remove underscores before parsing
-        raw = raw.replace("_", "");
+        if (numericPart.length() == 0)
+        {
+            logError(ctx.start, "Malformed integer literal: " + originalText);
+            note(ctx, ErrorType.INSTANCE);
+            return;
+        }
 
-        BigInteger bi = null;
+        BigInteger bi;
         try
         {
-            bi = new BigInteger(raw, base);
+            bi = new BigInteger(numericPart, base);
+            if (negative)
+                bi = bi.negate();
         }
         catch (NumberFormatException ex)
         {
@@ -2061,81 +2093,152 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             return;
         }
 
-        // Range Constants for Unsigned
+        // Range constants
+        BigInteger zero = BigInteger.ZERO;
         BigInteger maxInt32 = BigInteger.valueOf(Integer.MAX_VALUE);
         BigInteger minInt32 = BigInteger.valueOf(Integer.MIN_VALUE);
-        BigInteger maxUInt32 = new BigInteger("4294967295"); // 2^32 - 1
+        BigInteger maxUInt32 = new BigInteger("4294967295");
         BigInteger maxInt64 = BigInteger.valueOf(Long.MAX_VALUE);
         BigInteger minInt64 = BigInteger.valueOf(Long.MIN_VALUE);
-        // 2^64 - 1 (BigInteger constructor takes sign-magnitude, so this is correct)
         BigInteger maxUInt64 = new BigInteger("18446744073709551615");
-        BigInteger zero = BigInteger.ZERO;
 
-        if (hasUnsignedSuffix)
+        // --- Small-size suffixes ---
+        if (hasByte || hasShort)
         {
-            if (hasLongSuffix)
-            { // ULONG (uint64)
-                if (bi.compareTo(zero) < 0 || bi.compareTo(maxUInt64) > 0)
+            if (hasByte)
+            {
+                if (hasUnsigned)
+                {
+                    if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(BigInteger.valueOf(0xFFL)) > 0)
+                    {
+                        logError(ctx.start, "Unsigned byte literal out of range: " + originalText);
+                        note(ctx, ErrorType.INSTANCE);
+                        return;
+                    }
+                    note(ctx, PrimitiveType.UINT8);
+                    noteInfo(ctx, bi.intValue() & 0xFF);
+                }
+                else
+                {
+                    if (bi.compareTo(BigInteger.valueOf(Byte.MIN_VALUE)) < 0 || bi.compareTo(BigInteger.valueOf(Byte.MAX_VALUE)) > 0)
+                    {
+                        logError(ctx.start, "Byte literal out of range: " + originalText);
+                        note(ctx, ErrorType.INSTANCE);
+                        return;
+                    }
+                    note(ctx, PrimitiveType.INT8);
+                    noteInfo(ctx, bi.intValue());
+                }
+                return;
+            }
+            else // hasShort
+            {
+                if (hasUnsigned)
+                {
+                    if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(BigInteger.valueOf(0xFFFFL)) > 0)
+                    {
+                        logError(ctx.start, "Unsigned short literal out of range: " + originalText);
+                        note(ctx, ErrorType.INSTANCE);
+                        return;
+                    }
+                    note(ctx, PrimitiveType.UINT16);
+                    noteInfo(ctx, bi.intValue() & 0xFFFF);
+                }
+                else
+                {
+                    if (bi.compareTo(BigInteger.valueOf(Short.MIN_VALUE)) < 0 || bi.compareTo(BigInteger.valueOf(Short.MAX_VALUE)) > 0)
+                    {
+                        logError(ctx.start, "Short literal out of range: " + originalText);
+                        note(ctx, ErrorType.INSTANCE);
+                        return;
+                    }
+                    note(ctx, PrimitiveType.INT16);
+                    noteInfo(ctx, bi.intValue());
+                }
+                return;
+            }
+        }
+
+        // --- Unsigned suffix alone (without L) ---
+        if (hasUnsigned && !hasLong)
+        {
+            if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt32) <= 0)
+            {
+                note(ctx, PrimitiveType.UINT32);
+                noteInfo(ctx, bi.intValue());
+                return;
+            }
+            else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0)
+            {
+                note(ctx, PrimitiveType.UINT64);
+                noteInfo(ctx, bi.longValue());
+                return;
+            }
+            else
+            {
+                logError(ctx.start, "Unsigned literal out of range: " + originalText);
+                note(ctx, ErrorType.INSTANCE);
+                return;
+            }
+        }
+
+        // --- Long suffix ---
+        if (hasLong)
+        {
+            if (hasUnsigned)
+            {
+                if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(maxUInt64) > 0)
                 {
                     logError(ctx.start, "Unsigned long literal out of range: " + originalText);
                     note(ctx, ErrorType.INSTANCE);
                     return;
                 }
                 note(ctx, PrimitiveType.UINT64);
-                noteInfo(ctx, bi.longValue()); // Store as long bits
+                noteInfo(ctx, bi.longValue());
             }
             else
-            { // UINT (uint32)
-                if (bi.compareTo(zero) < 0 || bi.compareTo(maxUInt32) > 0)
+            {
+                if (bi.compareTo(minInt64) < 0 || bi.compareTo(maxInt64) > 0)
                 {
-                    logError(ctx.start, "Unsigned int literal out of range: " + originalText);
+                    logError(ctx.start, "Long literal out of range: " + originalText);
                     note(ctx, ErrorType.INSTANCE);
                     return;
                 }
-                note(ctx, PrimitiveType.UINT32);
-                noteInfo(ctx, bi.intValue()); // Store as int bits
-            }
-        }
-        else if (hasLongSuffix)
-        { // LONG (int64)
-            if (bi.compareTo(minInt64) < 0 || bi.compareTo(maxInt64) > 0)
-            {
-                logError(ctx.start, "Long literal out of range: " + originalText);
-                note(ctx, ErrorType.INSTANCE);
-                return;
-            }
-            note(ctx, PrimitiveType.INT64);
-            noteInfo(ctx, bi.longValue());
-        }
-        else
-        { // No suffix: Try int32, then int64
-            if (bi.compareTo(minInt32) >= 0 && bi.compareTo(maxInt32) <= 0)
-            {
-                note(ctx, PrimitiveType.INT32);
-                noteInfo(ctx, bi.intValue());
-            }
-            else if (bi.compareTo(minInt64) >= 0 && bi.compareTo(maxInt64) <= 0)
-            {
                 note(ctx, PrimitiveType.INT64);
                 noteInfo(ctx, bi.longValue());
             }
-            // Check for large positive numbers that fit in uint64
-            // This allows `var x = 18446744073709551615;` to be inferred as uint64
-            // (This part is optional, depending on your language rules for unsuffixed literals)
-			/*
-			else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0) {
-				logError(ctx.start, "Integer literal is too large for 'int64'. Use 'ul' suffix for 'uint64': " + originalText);
-				 // Or, if you want to be lenient:
-				 // note(ctx, PrimitiveType.UINT64);
-				 // noteInfo(ctx, bi.longValue());
-				note(ctx, ErrorType.INSTANCE);
-			}
-			*/
-            else
+            return;
+        }
+
+        // --- No suffix: try int32 -> int64 ---
+        if (bi.compareTo(minInt32) >= 0 && bi.compareTo(maxInt32) <= 0)
+        {
+            note(ctx, PrimitiveType.INT32);
+            noteInfo(ctx, bi.intValue());
+            return;
+        }
+        else if (bi.compareTo(minInt64) >= 0 && bi.compareTo(maxInt64) <= 0)
+        {
+            note(ctx, PrimitiveType.INT64);
+            noteInfo(ctx, bi.longValue());
+            return;
+        }
+        else
+        {
+            if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0)
             {
-                logError(ctx.start, "Integer literal out of range: " + originalText);
+                logError(ctx.start, "Integer literal is too large for signed types; add 'u' or 'ul' suffix for unsigned: " + originalText);
                 note(ctx, ErrorType.INSTANCE);
+                return;
             }
+            if (bi.compareTo(maxUInt64) > 0)
+            {
+                logError(ctx.start, "Integer literal out of range for all built-in types: " + originalText);
+                note(ctx, ErrorType.INSTANCE);
+                return;
+            }
+            logError(ctx.start, "Integer literal out of range: " + originalText);
+            note(ctx, ErrorType.INSTANCE);
         }
     }
 
