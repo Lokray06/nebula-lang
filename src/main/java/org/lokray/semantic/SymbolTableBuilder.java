@@ -715,7 +715,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
         return null;
     }
 
-
     // Helper to resolve known primitive types like "void"
     private Type resolveTypeFromCtx(String typeName)
     {

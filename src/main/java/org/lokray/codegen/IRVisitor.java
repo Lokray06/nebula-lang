@@ -1251,97 +1251,110 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "bitcast");
     }
 
-	@Override
-	public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
-	{
-		// 1) Literal: delegate
-		if (ctx.literal() != null)
-		{
-			return visit(ctx.literal());
-		}
+    @Override
+    public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
+    {
+        // 1) Literal: delegate
+        if (ctx.literal() != null)
+        {
+            return visit(ctx.literal());
+        }
 
-		// 2) Parenthesized expression: ( expr )
-		if (ctx.expression() != null)
-		{
-			return visit(ctx.expression());
-		}
+        // 2) Parenthesized expression: ( expr )
+        if (ctx.expression() != null)
+        {
+            return visit(ctx.expression());
+        }
 
-		// 3) Identifier usage
-		if (ctx.ID() != null)
-		{
-			Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText());
-			String name = ctx.ID().getText();
-			Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+        // 3) Identifier usage
+        if (ctx.ID() != null)
+        {
+            Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText());
+            String name = ctx.ID().getText();
+            Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 
-			if (symOpt.isPresent())
-			{
-				Symbol sym = symOpt.get();
+            if (symOpt.isPresent())
+            {
+                Symbol sym = symOpt.get();
 
-				if (sym instanceof VariableSymbol varSym)
-				{
-					Debug.logDebug("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
+                if (sym instanceof VariableSymbol varSym)
+                {
+                    Debug.logDebug("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
 
-					// --- START FIX ---
-					// Find the alloca for this variable using the scope-aware lookup
-					LLVMValueRef alloca = lookupVariable(varSym.getName()); // Use scope-aware lookup
-					// --- END FIX ---
+                    // --- START FIX ---
+                    // Find the alloca for this variable using the scope-aware lookup
+                    LLVMValueRef alloca = lookupVariable(varSym.getName()); // Use scope-aware lookup
+                    // --- END FIX ---
 
-					if (alloca == null)
-					{
-						// --- MODIFIED ERROR ---
-						// The old parameter-finding logic was unreliable.
-						// If lookupVariable fails, the alloca is genuinely missing.
-						Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?");
-						return null;
-						// --- END MODIFIED ERROR ---
-					}
+                    if (alloca == null)
+                    {
+                        // --- MODIFIED ERROR ---
+                        // The old parameter-finding logic was unreliable.
+                        // If lookupVariable fails, the alloca is genuinely missing.
+                        Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?");
+                        return null;
+                        // --- END MODIFIED ERROR ---
+                    }
 
-					// Load the variable value and return it
-					LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext);
-					LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load");
-					return loaded;
-				}
-				else if (sym instanceof MethodSymbol)
-				{
-					// This is a method group (e.g., "getPi").
-					// This is correct. The PostfixExpression visitor will handle the call.
-					Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym);
-					return null;
-				}
-				else
-				{
-					// Not a variable symbol (could be a type name, etc.)
-					Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym);
-					return null;
-				}
-			}
-			else
-			{
-				// --- START FIX ---
-				// Fallback: check scope-aware lookup by text
-				LLVMValueRef alloca = lookupVariable(name);
-				// --- END FIX ---
-				if (alloca != null)
-				{
-					Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
-					LLVMTypeRef llvmType = typeOpt.isPresent() ? TypeConverter.toLLVMType(typeOpt.get(), moduleContext) : LLVMInt32Type();
-					return LLVMBuildLoad2(builder, llvmType, alloca, name + ".load");
-				}
-				Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in any scope.");
-				return null;
-			}
-		}
+                    // Load the variable value and return it
+                    LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext);
+                    LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load");
+                    return loaded;
+                }
+                else if (sym instanceof MethodSymbol)
+                {
+                    // This is a method group (e.g., "getPi").
+                    // This is correct. The PostfixExpression visitor will handle the call.
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym);
+                    return null;
+                }
+                else
+                {
+                    // Not a variable symbol (could be a type name, etc.)
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym);
+                    return null;
+                }
+            }
+            else
+            {
+                // Fallback: check scope-aware lookup by text
+                LLVMValueRef alloca = lookupVariable(name); //
+                if (alloca != null)
+                {
+                    Debug.logWarning("IR: Fallback: check scope-aware lookup by text"); //
 
-		// 4) other primary forms (this, null, new, etc.) - simple fallback for now
-		return visitChildren(ctx);
-	}
+                    // --- START REVERT ---
+                    // This will stop the hang, but re-introduce the "0" bug
+                    Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
+                    Debug.logInfo("Resolved type:" + typeOpt.get().getName());
+                    LLVMTypeRef llvmType = typeOpt.isPresent() ? TypeConverter.toLLVMType(typeOpt.get(), moduleContext) : LLVMInt32Type(); // This default is what caused the "0" bug
+                    // --- END REVERT ---
+
+                    return LLVMBuildLoad2(builder, llvmType, alloca, name + ".load"); //
+                }
+                Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in any scope."); //
+                return null; //
+            }
+        }
+
+        // 4) other primary forms (this, null, new, etc.) - simple fallback for now
+        return visitChildren(ctx);
+    }
+
     @Override
     public LLVMValueRef visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
     {
-        if (ctx.powerExpression().size() > 1)
+        if (ctx.powerExpression().size() == 1)
         {
-            LLVMValueRef leftVal = visit(ctx.powerExpression(0));
-            LLVMValueRef rightVal = visit(ctx.powerExpression(1));
+            return visit(ctx.powerExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.powerExpression(0));
+
+        for (int i = 1; i < ctx.powerExpression().size(); i++)
+        {
+            LLVMValueRef rightVal = visit(ctx.powerExpression(i));
+            String op = ctx.getChild(2 * i - 1).getText(); // Get the operator (e.g., "*")
 
             if (leftVal == null || rightVal == null)
             {
@@ -1367,50 +1380,65 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             if (LLVMGetTypeKind(finalType) == LLVMDoubleTypeKind || LLVMGetTypeKind(finalType) == LLVMFloatTypeKind)
             {
                 // Floating-point arithmetic
-                if (ctx.MUL_OP() != null)
+                switch (op)
                 {
-                    return LLVMBuildFMul(builder, leftCasted, rightCasted, "fmul_tmp");
-                }
-                else if (ctx.DIV_OP() != null)
-                {
-                    return LLVMBuildFDiv(builder, leftCasted, rightCasted, "fdiv_tmp");
-                }
-                else if (ctx.MOD_OP() != null)
-                {
-                    // Note: FRem is floating-point remainder (modulus)
-                    return LLVMBuildFRem(builder, leftCasted, rightCasted, "frem_tmp");
+                    case "*":
+                        leftVal = LLVMBuildFMul(builder, leftCasted, rightCasted, "fmul_tmp");
+                        break;
+                    case "/":
+                        leftVal = LLVMBuildFDiv(builder, leftCasted, rightCasted, "fdiv_tmp");
+                        break;
+                    case "%":
+                        leftVal = LLVMBuildFRem(builder, leftCasted, rightCasted, "frem_tmp");
+                        break;
+                    default:
+                        Debug.logError("IR: Unknown FP multiplicative operator: " + op);
+                        return null;
                 }
             }
             else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind)
             {
                 // Integer arithmetic (assuming signed for Div and Rem)
-                if (ctx.MUL_OP() != null)
+                switch (op)
                 {
-                    return LLVMBuildMul(builder, leftCasted, rightCasted, "mul_tmp");
-                }
-                else if (ctx.DIV_OP() != null)
-                {
-                    return LLVMBuildSDiv(builder, leftCasted, rightCasted, "sdiv_tmp"); // Signed division
-                }
-                else if (ctx.MOD_OP() != null)
-                {
-                    return LLVMBuildSRem(builder, leftCasted, rightCasted, "srem_tmp"); // Signed remainder
+                    case "*":
+                        leftVal = LLVMBuildMul(builder, leftCasted, rightCasted, "mul_tmp");
+                        break;
+                    case "/":
+                        leftVal = LLVMBuildSDiv(builder, leftCasted, rightCasted, "sdiv_tmp"); // Signed division
+                        break;
+                    case "%":
+                        leftVal = LLVMBuildSRem(builder, leftCasted, rightCasted, "srem_tmp"); // Signed remainder
+                        break;
+                    default:
+                        Debug.logError("IR: Unknown Int multiplicative operator: " + op);
+                        return null;
                 }
             }
-
-            Debug.logError("IR: Unsupported types for multiplicative operation.");
-            return null;
+            else
+            {
+                Debug.logError("IR: Unsupported types for multiplicative operation.");
+                return null;
+            }
         }
-        return visitChildren(ctx);
+
+        return leftVal; // Return the final accumulated value
     }
 
     @Override
     public LLVMValueRef visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
     {
-        if (ctx.multiplicativeExpression().size() > 1)
+        if (ctx.multiplicativeExpression().size() == 1)
         {
-            LLVMValueRef leftVal = visit(ctx.multiplicativeExpression(0));
-            LLVMValueRef rightVal = visit(ctx.multiplicativeExpression(1));
+            return visit(ctx.multiplicativeExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.multiplicativeExpression(0));
+
+        for (int i = 1; i < ctx.multiplicativeExpression().size(); i++)
+        {
+            LLVMValueRef rightVal = visit(ctx.multiplicativeExpression(i));
+            String op = ctx.getChild(2 * i - 1).getText(); // Get the operator (e.g., "+")
 
             if (leftVal == null || rightVal == null)
             {
@@ -1436,32 +1464,43 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             if (LLVMGetTypeKind(finalType) == LLVMDoubleTypeKind || LLVMGetTypeKind(finalType) == LLVMFloatTypeKind)
             {
                 // Floating-point arithmetic
-                if (ctx.ADD_OP() != null)
+                switch (op)
                 {
-                    return LLVMBuildFAdd(builder, leftCasted, rightCasted, "fadd_tmp");
-                }
-                else if (ctx.SUB_OP() != null)
-                {
-                    return LLVMBuildFSub(builder, leftCasted, rightCasted, "fsub_tmp");
+                    case "+":
+                        leftVal = LLVMBuildFAdd(builder, leftCasted, rightCasted, "fadd_tmp");
+                        break;
+                    case "-":
+                        leftVal = LLVMBuildFSub(builder, leftCasted, rightCasted, "fsub_tmp");
+                        break;
+                    default:
+                        Debug.logError("IR: Unknown FP additive operator: " + op);
+                        return null;
                 }
             }
             else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind)
             {
                 // Integer arithmetic
-                if (ctx.ADD_OP() != null)
+                switch (op)
                 {
-                    return LLVMBuildAdd(builder, leftCasted, rightCasted, "add_tmp");
-                }
-                else if (ctx.SUB_OP() != null)
-                {
-                    return LLVMBuildSub(builder, leftCasted, rightCasted, "sub_tmp");
+                    case "+":
+                        leftVal = LLVMBuildAdd(builder, leftCasted, rightCasted, "add_tmp");
+                        break;
+                    case "-":
+                        leftVal = LLVMBuildSub(builder, leftCasted, rightCasted, "sub_tmp");
+                        break;
+                    default:
+                        Debug.logError("IR: Unknown Int additive operator: " + op);
+                        return null;
                 }
             }
-
-            Debug.logError("IR: Unsupported types for additive operation.");
-            return null;
+            else
+            {
+                Debug.logError("IR: Unsupported types for additive operation.");
+                return null;
+            }
         }
-        return visitChildren(ctx);
+
+        return leftVal; // Return the final accumulated value
     }
 
 	private LLVMValueRef createEntryBlockAlloca(LLVMValueRef function, LLVMTypeRef type, String varName)

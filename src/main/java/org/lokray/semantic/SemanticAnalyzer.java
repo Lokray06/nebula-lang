@@ -258,12 +258,14 @@ public class SemanticAnalyzer
     {
         if (node == null)
         {
+            Debug.logInfo("getResolvedType() -> Node is null, returning Optional.empty()");
             return Optional.empty();
         }
 
         Type t = resolvedTypes.get(node);
         if (t != null)
         {
+            Debug.logInfo("getResolvedType() -> Resolved: " + t.getName() + ", returning Optional.of(" + t.getName() + ")");
             return Optional.of(t);
         }
 
