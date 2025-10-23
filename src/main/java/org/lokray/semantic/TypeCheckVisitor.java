@@ -1474,117 +1474,143 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
     @Override
     public Type visitPrimary(NebulaParser.PrimaryContext ctx)
     {
+        // --- START NEW LOGGING ---
+        Debug.logDebug("TypeCheckVisitor visiting Primary: " + ctx.getText() + " (Context Hash: " + ctx.hashCode() + ")");
+        // --- END NEW LOGGING ---
+
         if (ctx.NEW_KW() != null)
         {
+        // ... (existing 'new' logic) ... [cite: 485-490]
             // This is a constructor call: new Person(...)
-            Type type = resolveType(ctx.type());
-            if (!(type instanceof ClassType))
-            {
-                logError(ctx.type().start, "Can only instantiate a class type.");
-                return ErrorType.INSTANCE;
-            }
-            ClassSymbol classSymbol = ((ClassType) type).getClassSymbol();
+            Type type = resolveType(ctx.type()); // [cite: 485]
+        if (!(type instanceof ClassType)) // [cite: 485]
+        {
+            logError(ctx.type().start, "Can only instantiate a class type."); // [cite: 486]
+            return ErrorType.INSTANCE; // [cite: 486]
+        }
+            ClassSymbol classSymbol = ((ClassType) type).getClassSymbol(); // [cite: 486]
 
             // Handle constructor call: new Person(args)
-            if (ctx.L_PAREN_SYM() != null)
-            {
-                // We pass `ctx` itself for error reporting
-                visitMethodCall(ctx, classSymbol, classSymbol.getName(), ctx.argumentList());
-            }
+        if (ctx.L_PAREN_SYM() != null) // [cite: 486]
+        {
+            // We pass `ctx` itself for error reporting
+            visitMethodCall(ctx, classSymbol, classSymbol.getName(), ctx.argumentList()); // [cite: 487]
+        }
             // Handle array creation: new int[size]
-            else if (ctx.L_BRACK_SYM() != null)
-            {
-                Type sizeType = visit(ctx.expression());
-                if (!sizeType.isInteger())
-                {
-                    logError(ctx.expression().start, "Array size must be an integer.");
-                }
-                // The type of `new int[5]` is `int[]`.
-                type = new ArrayType(type);
-            }
+        else if (ctx.L_BRACK_SYM() != null) // [cite: 488]
+        {
+            Type sizeType = visit(ctx.expression()); // [cite: 488]
+            if (!sizeType.isInteger()) // [cite: 488]
+        {
+            logError(ctx.expression().start, "Array size must be an integer."); // [cite: 489]
+        }
+            // The type of `new int[5]` is `int[]`.
+            type = new ArrayType(type); // [cite: 489]
+        }
 
-            note(ctx, type);
-            return type;
+
+            note(ctx, type); // [cite: 490]
+            return type; // [cite: 490]
         }
 
         if (ctx.ID() != null)
         {
-            String name = ctx.ID().getText();
+            // --- START NEW LOGGING ---
+            Debug.logDebug("  -> Primary is an Identifier: " + ctx.ID().getText());
+            // --- END NEW LOGGING ---
 
-            if (name.equals("this"))
-            {
-                if (currentMethod != null && currentMethod.isStatic())
-                {
-                    logError(ctx.ID().getSymbol(), "'this' cannot be used in a static context.");
-                    return ErrorType.INSTANCE;
-                }
-                if (currentClass == null)
-                {
-                    logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context.");
-                    return ErrorType.INSTANCE;
-                }
-                Type thisType = currentClass.getType();
-                note(ctx, thisType);
-                note(ctx, new VariableSymbol("this", thisType, false, false, true));
-                return thisType;
-            }
+            String name = ctx.ID().getText(); // [cite: 490]
 
-            Optional<Symbol> symbolOpt = currentScope.resolve(name);
-            if (symbolOpt.isEmpty())
-            {
-                logError(ctx.ID().getSymbol(), "Cannot find symbol '" + name + "'.");
-                note(ctx, ErrorType.INSTANCE);
-                return ErrorType.INSTANCE;
-            }
+        if (name.equals("this")) // [cite: 490]
+        {
+            // ... (existing 'this' logic) ... [cite: 491-493]
+            if (currentMethod != null && currentMethod.isStatic()) // [cite: 491]
+        {
+            logError(ctx.ID().getSymbol(), "'this' cannot be used in a static context."); // [cite: 491]
+            return ErrorType.INSTANCE; // [cite: 491]
+        }
+            if (currentClass == null) // [cite: 492]
+        {
+            logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context."); // [cite: 492]
+            return ErrorType.INSTANCE; // [cite: 492]
+        }
+            Type thisType = currentClass.getType(); // [cite: 493]
+            note(ctx, thisType); // [cite: 493]
+            note(ctx, new VariableSymbol("this", thisType, false, false, true)); // [cite: 493]
+            return thisType; // [cite: 493]
+        }
 
-            Symbol symbol = symbolOpt.get();
-            if (symbol instanceof AliasSymbol)
-            {
-                symbol = ((AliasSymbol) symbol).getTargetSymbol();
-            }
+            Optional<Symbol> symbolOpt = currentScope.resolve(name); // [cite: 493]
+        if (symbolOpt.isEmpty()) // [cite: 493]
+        {
+            // --- START NEW LOGGING ---
+            Debug.logDebug("    -> Symbol resolution FAILED for '" + name + "'");
+            // --- END NEW LOGGING ---
+            logError(ctx.ID().getSymbol(), "Cannot find symbol '" + name + "'."); // [cite: 494]
+            note(ctx, ErrorType.INSTANCE); // [cite: 494]
+            return ErrorType.INSTANCE; // [cite: 494]
+        }
 
-            note(ctx, symbol);
-            Type type = symbol.getType();
-            if (type instanceof UnresolvedType)
-            {
-                type = resolveUnresolvedType((UnresolvedType) type, ctx.ID().getSymbol());
-            }
-            note(ctx, type);
-            return type;
+            Symbol symbol = symbolOpt.get(); // [cite: 494]
+        if (symbol instanceof AliasSymbol) // [cite: 494]
+        {
+            symbol = ((AliasSymbol) symbol).getTargetSymbol(); // [cite: 495]
+        }
+
+            // --- START NEW LOGGING ---
+            Debug.logDebug("    -> Symbol resolution SUCCEEDED for '" + name + "': " + symbol);
+            // --- END NEW LOGGING ---
+
+            note(ctx, symbol); // [cite: 495]
+            Type type = symbol.getType(); // [cite: 495]
+        if (type instanceof UnresolvedType) // [cite: 495]
+        {
+            type = resolveUnresolvedType((UnresolvedType) type, ctx.ID().getSymbol()); // [cite: 495]
+        }
+
+            // --- START NEW LOGGING ---
+            Debug.logDebug("    -> Final type for '" + name + "': " + (type != null ? type.getName() : "null"));
+            // --- END NEW LOGGING ---
+
+            note(ctx, type); // [cite: 496]
+            return type; // [cite: 496]
         }
         if (ctx.literal() != null)
         {
-            Type literalType = visit(ctx.literal());
-            note(ctx, literalType);
-            return literalType;
+        // ... (existing literal logic) ... [cite: 496]
+            Type literalType = visit(ctx.literal()); // [cite: 496]
+            note(ctx, literalType); // [cite: 496]
+            return literalType; // [cite: 496]
         }
         if (ctx.expression() != null)
         {
-            Type exprType = visit(ctx.expression());
-            note(ctx, exprType);
-            return exprType;
+        // ... (existing parenthesized expression logic) ... [cite: 497]
+            Type exprType = visit(ctx.expression()); // [cite: 497]
+            note(ctx, exprType); // [cite: 497]
+            return exprType; // [cite: 497]
         }
 
         // This handles the new primitiveType in primary rule
         if (ctx.primitiveType() != null)
         {
-            String baseTypeName = ctx.primitiveType().getText();
+        // ... (existing primitive type logic) ... [cite: 497-499]
+            String baseTypeName = ctx.primitiveType().getText(); // [cite: 498]
 
             // Find the symbol for the primitive type in the global scope
-            Optional<Symbol> symbolOpt = globalScope.resolve(baseTypeName);
+            Optional<Symbol> symbolOpt = globalScope.resolve(baseTypeName); // [cite: 498]
 
-            if (symbolOpt.isEmpty())
-            {
-                logError(ctx.primitiveType().start, "Undefined primitive type: '" + baseTypeName + "'.");
-                return ErrorType.INSTANCE;
-            }
-
-            Type primitive = symbolOpt.get().getType();
-            note(ctx, primitive);
-            return primitive;
+        if (symbolOpt.isEmpty()) // [cite: 498]
+        {
+            logError(ctx.primitiveType().start, "Undefined primitive type: '" + baseTypeName + "'."); // [cite: 499]
+            return ErrorType.INSTANCE; // [cite: 499]
         }
 
-        return visitChildren(ctx);
+            Type primitive = symbolOpt.get().getType(); // [cite: 499]
+            note(ctx, primitive); // [cite: 499]
+            return primitive; // [cite: 499]
+        }
+
+        return visitChildren(ctx); // [cite: 499]
     }
 
     @Override

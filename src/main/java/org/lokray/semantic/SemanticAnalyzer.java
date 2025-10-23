@@ -224,33 +224,53 @@ public class SemanticAnalyzer
 
     public Optional<Symbol> getResolvedSymbol(ParseTree node)
     {
-        if (node == null)
-        {
-            return Optional.empty();
-        }
+        // --- START NEW LOGGING ---
+        String nodeText = (node != null) ? node.getText() : "null";
+        int nodeHash = (node != null) ? node.hashCode() : 0;
+        Interval nodeInterval = (node != null) ? node.getSourceInterval() : null;
+        // Use WARNING level temporarily to make sure it stands out
+        Debug.logWarning("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
+                " (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
+        // --- END NEW LOGGING ---
+
+        if (node == null) { /*...*/ return Optional.empty(); }
 
         // fast path: direct object-equality lookup
         Symbol s = resolvedSymbols.get(node);
         if (s != null)
         {
+            // --- START NEW LOGGING ---
+            Debug.logWarning("  -> Found symbol via direct lookup: " + s);
+            // --- END NEW LOGGING ---
             return Optional.of(s);
         }
 
-        // fallback: match by source interval (start/stop token indices)
+        // fallback: match by source interval
         Interval target = node.getSourceInterval();
-        if (target == null)
-        {
-            return Optional.empty();
-        }
+        if (target == null) { /*...*/ return Optional.empty(); }
 
-        for (ParseTree key : resolvedSymbols.keySet())
+        // --- START NEW LOGGING ---
+        Debug.logWarning("  -> Direct lookup failed, trying interval fallback...");
+        // --- END NEW LOGGING ---
+        for (Map.Entry<ParseTree, Symbol> entry : resolvedSymbols.entrySet()) // Iterate entries
         {
+            ParseTree key = entry.getKey();
             Interval kint = key.getSourceInterval();
+            // --- START NEW LOGGING ---
+            // Uncomment below for VERY verbose logging if needed
+            // Debug.logDebug("    -> Comparing target " + target + " with key " + key.getText() + " interval " + kint + " (Key Hash: " + key.hashCode() + ")");
+            // --- END NEW LOGGING ---
             if (kint != null && kint.equals(target))
             {
-                return Optional.ofNullable(resolvedSymbols.get(key));
+                // --- START NEW LOGGING ---
+                Debug.logWarning("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
+                // --- END NEW LOGGING ---
+                return Optional.ofNullable(entry.getValue());
             }
         }
+        // --- START NEW LOGGING ---
+        Debug.logWarning("  -> Interval fallback FAILED.");
+        // --- END NEW LOGGING ---
         return Optional.empty();
     }
 

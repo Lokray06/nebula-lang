@@ -1317,22 +1317,28 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             }
             else
             {
-                // Fallback: check scope-aware lookup by text
-                LLVMValueRef alloca = lookupVariable(name); //
-                if (alloca != null)
-                {
-                    Debug.logWarning("IR: Fallback: check scope-aware lookup by text"); //
+				/*
+	            LLVMValueRef alloca = lookupVariable(name);
+	            if (alloca != null)
+	            {
+		            // --- START FIX ---
+		            // If we found an alloca but not a symbol, we can
+		            // infer the type directly from the alloca itself.
 
-                    // --- START REVERT ---
-                    // This will stop the hang, but re-introduce the "0" bug
-                    Optional<org.lokray.semantic.type.Type> typeOpt = semanticAnalyzer.getResolvedType(ctx);
-                    Debug.logInfo("Resolved type:" + typeOpt.get().getName());
-                    LLVMTypeRef llvmType = typeOpt.isPresent() ? TypeConverter.toLLVMType(typeOpt.get(), moduleContext) : LLVMInt32Type(); // This default is what caused the "0" bug
-                    // --- END REVERT ---
+		            // 1. Get the type of the alloca (which is a pointer, e.g., double*)
+		            LLVMTypeRef allocaType = LLVMTypeOf(alloca);
 
-                    return LLVMBuildLoad2(builder, llvmType, alloca, name + ".load"); //
-                }
+		            // 2. Get the element type of that pointer (e.g., double)
+		            LLVMTypeRef varType = LLVMGetElementType(allocaType);
+
+		            Debug.logWarning("IR: Fallback: Found alloca for '" + name + "' but no symbol. " +  "Loading with type from alloca: " + LLVMPrintTypeToString(varType));
+
+		            // 3. Load using the *correct* type
+		            return LLVMBuildLoad2(builder, varType, alloca, name + ".load");
+		            // --- END FIX ---
+	            }
                 Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in any scope."); //
+                */
                 return null; //
             }
         }
