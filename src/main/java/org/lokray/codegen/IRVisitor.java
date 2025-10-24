@@ -1523,7 +1523,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
         LLVMTypeRef i1Type = LLVMInt1TypeInContext(moduleContext);
         LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
-        // Get the function (LLVMValueRef) from the current block
         LLVMValueRef entryFunction = LLVMGetBasicBlockParent(currentBlock);
 
         LLVMBasicBlockRef endBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "lor.end");
@@ -1535,8 +1534,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         LLVMValueRef leftBool = TypeConverter.toBoolean(leftVal, null, moduleContext, builder);
         currentBlock = LLVMGetInsertBlock(builder);
 
-        // FIX: Add Incoming Call 1: Wrap single value/block in PointerPointers and specify count=1
-        LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(leftBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+        // FIX 1: Explicitly create single-element arrays for arguments
+        LLVMValueRef[] incomingValue1 = {leftBool};
+        LLVMBasicBlockRef[] incomingBlock1 = {currentBlock};
+        LLVMAddIncoming(phi, new PointerPointer(incomingValue1), new PointerPointer(incomingBlock1), 1);
 
         for (int i = 1; i < ctx.logicalAndExpression().size(); i++) {
             LLVMBasicBlockRef nextOperandBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "lor.next");
@@ -1549,8 +1550,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             LLVMValueRef rightBool = TypeConverter.toBoolean(rightVal, null, moduleContext, builder);
             currentBlock = LLVMGetInsertBlock(builder);
 
-            // FIX: Add Incoming Call 2: Wrap single value/block in PointerPointers and specify count=1
-            LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(rightBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+            // FIX 2: Explicitly create single-element arrays for arguments
+            LLVMValueRef[] incomingValue2 = {rightBool};
+            LLVMBasicBlockRef[] incomingBlock2 = {currentBlock};
+            LLVMAddIncoming(phi, new PointerPointer(incomingValue2), new PointerPointer(incomingBlock2), 1);
 
             LLVMBuildBr(builder, endBlock);
 
@@ -1570,7 +1573,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
         LLVMTypeRef i1Type = LLVMInt1TypeInContext(moduleContext);
         LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
-        // Get the function (LLVMValueRef) from the current block
         LLVMValueRef entryFunction = LLVMGetBasicBlockParent(currentBlock);
 
         LLVMBasicBlockRef endBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "land.end");
@@ -1582,8 +1584,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         LLVMValueRef leftBool = TypeConverter.toBoolean(leftVal, null, moduleContext, builder);
         currentBlock = LLVMGetInsertBlock(builder);
 
-        // FIX: Add Incoming Call 3: Wrap single value/block in PointerPointers and specify count=1
-        LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(leftBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+        // FIX 3: Explicitly create single-element arrays for arguments
+        LLVMValueRef[] incomingValue3 = {leftBool};
+        LLVMBasicBlockRef[] incomingBlock3 = {currentBlock};
+        LLVMAddIncoming(phi, new PointerPointer(incomingValue3), new PointerPointer(incomingBlock3), 1);
 
         for (int i = 1; i < ctx.bitwiseOrExpression().size(); i++) {
             LLVMBasicBlockRef nextOperandBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "land.next");
@@ -1596,8 +1600,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
             LLVMValueRef rightBool = TypeConverter.toBoolean(rightVal, null, moduleContext, builder);
             currentBlock = LLVMGetInsertBlock(builder);
 
-            // FIX: Add Incoming Call 4: Wrap single value/block in PointerPointers and specify count=1
-            LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(rightBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+            // FIX 4: Explicitly create single-element arrays for arguments
+            LLVMValueRef[] incomingValue4 = {rightBool};
+            LLVMBasicBlockRef[] incomingBlock4 = {currentBlock};
+            LLVMAddIncoming(phi, new PointerPointer(incomingValue4), new PointerPointer(incomingBlock4), 1);
 
             LLVMBuildBr(builder, endBlock);
 
@@ -1785,7 +1791,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
                     // Convert operand to boolean (i1) if it isn't already
                     LLVMValueRef boolOperand = TypeConverter.toBoolean(operand, null, moduleContext, builder); // Simplified context passing for now
                     // XOR with true (1) to negate
-                    LLVMValueRef one = LLVMConstInt(LLVMInt1TypeInContext(moduleContext), 1, 0);
+                    LLVMValueRef one = LLVMConstAllOnes(LLVMTypeOf(boolOperand)); // produces all-ones of same type (i1 -> true)
                     return LLVMBuildXor(builder, boolOperand, one, "lognot_tmp");
                 case NebulaParser.BIT_NOT_OP:
                     if (LLVMGetTypeKind(LLVMTypeOf(operand)) == LLVMIntegerTypeKind) {
