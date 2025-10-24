@@ -1277,149 +1277,367 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         return currentType;
     }
 
+    // --- NEWLY FIXED Bitwise Visitors (Based on parser grammar) ---
+
     @Override
     public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx)
     {
-        if (ctx.logicalAndExpression().size() > 1)
-        {
-            Type left = visit(ctx.logicalAndExpression(0));
-            Type right = visit(ctx.logicalAndExpression(1));
-
-            if (!left.isBoolean() || !right.isBoolean())
-            {
-                logError(ctx.LOG_OR_OP(0).getSymbol(), "Logical operator '||' can only be applied to boolean types.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
+        if (ctx.logicalAndExpression().size() == 1) {
+            return visit(ctx.logicalAndExpression(0));
         }
-        return visitChildren(ctx);
+
+        Type resultType = PrimitiveType.BOOLEAN; // Logical operations always result in bool
+        boolean hasError = false;
+
+        // Loop through ALL operands
+        for (int i = 0; i < ctx.logicalAndExpression().size(); i++) {
+            Type operandType = visit(ctx.logicalAndExpression(i));
+
+            if (operandType instanceof ErrorType) {
+                hasError = true; // Propagate error
+                continue;
+            }
+
+            // Check if the operand is boolean
+            if (!operandType.isBoolean()) {
+                Token errorToken = (i > 0) ? ctx.LOG_OR_OP(i - 1).getSymbol() : ctx.logicalAndExpression(i).start;
+                logError(errorToken, "Logical operator '||' can only be applied to boolean types, but found '" + operandType.getName() + "'.");
+                hasError = true;
+            }
+        }
+
+        if (hasError) {
+            resultType = ErrorType.INSTANCE;
+        }
+
+        note(ctx, resultType);
+        return resultType;
     }
 
     @Override
     public Type visitLogicalAndExpression(NebulaParser.LogicalAndExpressionContext ctx)
     {
-        if (ctx.bitwiseOrExpression().size() > 1)
-        {
-            Type left = visit(ctx.bitwiseOrExpression(0));
-            Type right = visit(ctx.bitwiseOrExpression(1));
-
-            if (!left.isBoolean() || !right.isBoolean())
-            {
-                logError(ctx.LOG_AND_OP(0).getSymbol(), "Logical operator '&&' can only be applied to boolean types.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
+        if (ctx.bitwiseOrExpression().size() == 1) {
+            return visit(ctx.bitwiseOrExpression(0));
         }
-        return visitChildren(ctx);
+
+        Type resultType = PrimitiveType.BOOLEAN; // Logical operations always result in bool
+        boolean hasError = false;
+
+        // Loop through ALL operands
+        for (int i = 0; i < ctx.bitwiseOrExpression().size(); i++) {
+            Type operandType = visit(ctx.bitwiseOrExpression(i));
+
+            if (operandType instanceof ErrorType) {
+                hasError = true;
+                continue;
+            }
+
+            // Check if the operand is boolean
+            if (!operandType.isBoolean()) {
+                Token errorToken = (i > 0) ? ctx.LOG_AND_OP(i - 1).getSymbol() : ctx.bitwiseOrExpression(i).start;
+                logError(errorToken, "Logical operator '&&' can only be applied to boolean types, but found '" + operandType.getName() + "'.");
+                hasError = true;
+            }
+        }
+
+        if (hasError) {
+            resultType = ErrorType.INSTANCE;
+        }
+
+        note(ctx, resultType);
+        return resultType;
+    }
+
+    @Override
+    public Type visitBitwiseOrExpression(NebulaParser.BitwiseOrExpressionContext ctx) {
+        if (ctx.bitwiseXorExpression().size() == 1) {
+            return visit(ctx.bitwiseXorExpression(0));
+        }
+
+        // Visit the first operand to establish the initial type
+        Type finalType = visit(ctx.bitwiseXorExpression(0));
+        if (finalType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        if (!finalType.isInteger()) {
+            logError(ctx.bitwiseXorExpression(0).start, "Bitwise operator '|' can only be applied to integer types, but found '" + finalType.getName() + "'.");
+            finalType = ErrorType.INSTANCE;
+        }
+
+        // Loop through the rest of the operands
+        for (int i = 1; i < ctx.bitwiseXorExpression().size(); i++) {
+            Type rightType = visit(ctx.bitwiseXorExpression(i));
+            if (rightType instanceof ErrorType) finalType = ErrorType.INSTANCE;
+
+            if (!rightType.isInteger()) {
+                logError(ctx.bitwiseXorExpression(i).start, "Bitwise operator '|' can only be applied to integer types, but found '" + rightType.getName() + "'.");
+                finalType = ErrorType.INSTANCE;
+            }
+
+            // Determine the wider type for the next iteration (if no error)
+            if (finalType != ErrorType.INSTANCE) {
+                finalType = Type.getWiderType(finalType, rightType);
+            }
+        }
+
+        note(ctx, finalType);
+        return finalType;
+    }
+
+    @Override
+    public Type visitBitwiseXorExpression(NebulaParser.BitwiseXorExpressionContext ctx) {
+        if (ctx.bitwiseAndExpression().size() == 1) {
+            return visit(ctx.bitwiseAndExpression(0));
+        }
+
+        Type finalType = visit(ctx.bitwiseAndExpression(0));
+        if (finalType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        if (!finalType.isInteger()) {
+            logError(ctx.bitwiseAndExpression(0).start, "Bitwise operator '^' can only be applied to integer types, but found '" + finalType.getName() + "'.");
+            finalType = ErrorType.INSTANCE;
+        }
+
+        for (int i = 1; i < ctx.bitwiseAndExpression().size(); i++) {
+            Type rightType = visit(ctx.bitwiseAndExpression(i));
+            if (rightType instanceof ErrorType) finalType = ErrorType.INSTANCE;
+
+            if (!rightType.isInteger()) {
+                logError(ctx.bitwiseAndExpression(i).start, "Bitwise operator '^' can only be applied to integer types, but found '" + rightType.getName() + "'.");
+                finalType = ErrorType.INSTANCE;
+            }
+
+            if (finalType != ErrorType.INSTANCE) {
+                finalType = Type.getWiderType(finalType, rightType);
+            }
+        }
+
+        note(ctx, finalType);
+        return finalType;
+    }
+
+    @Override
+    public Type visitBitwiseAndExpression(NebulaParser.BitwiseAndExpressionContext ctx) {
+        if (ctx.equalityExpression().size() == 1) {
+            return visit(ctx.equalityExpression(0));
+        }
+
+        Type finalType = visit(ctx.equalityExpression(0));
+        if (finalType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        if (!finalType.isInteger()) {
+            logError(ctx.equalityExpression(0).start, "Bitwise operator '&' can only be applied to integer types, but found '" + finalType.getName() + "'.");
+            finalType = ErrorType.INSTANCE;
+        }
+
+        for (int i = 1; i < ctx.equalityExpression().size(); i++) {
+            Type rightType = visit(ctx.equalityExpression(i));
+            if (rightType instanceof ErrorType) finalType = ErrorType.INSTANCE;
+
+            if (!rightType.isInteger()) {
+                logError(ctx.equalityExpression(i).start, "Bitwise operator '&' can only be applied to integer types, but found '" + rightType.getName() + "'.");
+                finalType = ErrorType.INSTANCE;
+            }
+
+            if (finalType != ErrorType.INSTANCE) {
+                finalType = Type.getWiderType(finalType, rightType);
+            }
+        }
+
+        note(ctx, finalType);
+        return finalType;
     }
 
     @Override
     public Type visitEqualityExpression(NebulaParser.EqualityExpressionContext ctx)
     {
-        if (ctx.relationalExpression().size() > 1)
-        {
-            Type left = visit(ctx.relationalExpression(0));
-            Type right = visit(ctx.relationalExpression(1));
-
-            // Basic check: Allow comparison if types are assignable to each other.
-            // A more robust implementation would check for common supertypes or interfaces.
-            if (!left.isAssignableTo(right) && !right.isAssignableTo(left))
-            {
-                logError(ctx.EQUAL_EQUAL_SYM(0).getSymbol(), "Operator cannot be applied to '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
+        if (ctx.relationalExpression().size() == 1) {
+            return visit(ctx.relationalExpression(0));
         }
-        return visitChildren(ctx);
+
+        Type leftType = visit(ctx.relationalExpression(0));
+        boolean hasError = false;
+
+        // Loop through all comparisons
+        for (int i = 1; i < ctx.relationalExpression().size(); i++) {
+            Type rightType = visit(ctx.relationalExpression(i));
+
+            if (leftType instanceof ErrorType || rightType instanceof ErrorType) {
+                hasError = true; // Propagate error
+            } else if (!leftType.isAssignableTo(rightType) && !rightType.isAssignableTo(leftType)) {
+                // Get operator token
+                Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+                logError(opToken, "Operator '" + opToken.getText() + "' cannot be applied to '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+                hasError = true;
+            }
+
+            // The result of a comparison is always boolean, but for chained comparisons (a == b == c),
+            // the next comparison is (boolean == c), so we update leftType.
+            // For simplicity, let's assume Nebula chains like C++ (a == b) && (b == c) is not intended,
+            // but rather the result of (a == b) is compared to c.
+            // The result of the full expression is boolean.
+            leftType = PrimitiveType.BOOLEAN;
+        }
+
+        Type resultType = hasError ? ErrorType.INSTANCE : PrimitiveType.BOOLEAN;
+        note(ctx, resultType);
+        return resultType;
     }
 
     @Override
     public Type visitRelationalExpression(NebulaParser.RelationalExpressionContext ctx)
     {
-        if (ctx.shiftExpression().size() > 1)
-        {
-            Type left = visit(ctx.shiftExpression(0));
-            Type right = visit(ctx.shiftExpression(1));
-
-            // Relational operators typically apply only to numeric types.
-            if (!left.isNumeric() || !right.isNumeric())
-            {
-                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Relational operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            note(ctx, PrimitiveType.BOOLEAN);
-            return PrimitiveType.BOOLEAN;
+        if (ctx.shiftExpression().size() == 1) {
+            return visit(ctx.shiftExpression(0));
         }
-        return visitChildren(ctx);
+
+        Type leftType = visit(ctx.shiftExpression(0));
+        boolean hasError = false;
+
+        // Loop through all comparisons
+        for (int i = 1; i < ctx.shiftExpression().size(); i++) {
+            Type rightType = visit(ctx.shiftExpression(i));
+
+            if (leftType instanceof ErrorType || rightType instanceof ErrorType) {
+                hasError = true;
+            } else if (!leftType.isNumeric() || !rightType.isNumeric()) {
+                Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+                logError(opToken, "Relational operator '" + opToken.getText() + "' cannot be applied to non-numeric types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+                hasError = true;
+            }
+
+            // Like equality, the result of a single comparison is boolean.
+            // For chained comparisons (a < b < c), the next op compares (boolean < c).
+            // We will assume this is an error for now, as it's rarely intended.
+            if (i > 1 && !leftType.isNumeric()) {
+                Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+                logError(opToken, "Cannot chain relational operators. The result of '" + ctx.shiftExpression(i-2).getText() + " " + ctx.getChild(2*i-3).getText() + " " + ctx.shiftExpression(i-1).getText() + "' is a boolean, which cannot be compared with '" + opToken.getText() + "'.");
+                hasError = true;
+            }
+
+            leftType = PrimitiveType.BOOLEAN; // The result of this part of the chain
+        }
+
+        Type resultType = hasError ? ErrorType.INSTANCE : PrimitiveType.BOOLEAN;
+        note(ctx, resultType);
+        return resultType;
+    }
+
+    @Override
+    public Type visitShiftExpression(NebulaParser.ShiftExpressionContext ctx) {
+        if (ctx.additiveExpression().size() == 1) {
+            return visit(ctx.additiveExpression(0));
+        }
+
+        Type leftType = visit(ctx.additiveExpression(0));
+        if (leftType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        // The left-hand side must be an integer
+        if (!leftType.isInteger()) {
+            logError(ctx.additiveExpression(0).start, "Shift operator operand must be an integer type, but found '" + leftType.getName() + "'.");
+            leftType = ErrorType.INSTANCE; // Mark as error
+        }
+
+        // Loop through all right-hand operands
+        for (int i = 1; i < ctx.additiveExpression().size(); i++) {
+            Type rightType = visit(ctx.additiveExpression(i));
+            if (rightType instanceof ErrorType) {
+                leftType = ErrorType.INSTANCE; // Propagate error
+                continue;
+            }
+
+            // The right-hand side must also be an integer
+            if (!rightType.isInteger()) {
+                logError(ctx.additiveExpression(i).start, "Shift operator right-hand operand must be an integer type, but found '" + rightType.getName() + "'.");
+                leftType = ErrorType.INSTANCE;
+            }
+        }
+
+        // The result type of a shift is always the type of the left-hand operand
+        note(ctx, leftType);
+        return leftType;
     }
 
     @Override
     public Type visitAdditiveExpression(NebulaParser.AdditiveExpressionContext ctx)
     {
-        if (ctx.multiplicativeExpression().size() > 1)
+        if (ctx.multiplicativeExpression().size() == 1)
         {
-            // Visit left first.
-            Type left = visit(ctx.multiplicativeExpression(0));
-
-            // Set expectation for the right operand to match left (if numeric). This helps disambiguate calls
-            // such as ".0 + getPi()" where left is a double literal so right should be resolved as double.
-            Type old = expectedType;
-            if (left != null && left.isNumeric())
-            {
-                expectedType = left;
-            }
-
-            // Visit right operand with the expectation set.
-            Type right = visit(ctx.multiplicativeExpression(1));
-            expectedType = old;
-
-            // Propagate errors
-            if (left instanceof ErrorType || right instanceof ErrorType)
-            {
-                return ErrorType.INSTANCE;
-            }
-
-            // Both sides must be numeric for arithmetic (simplified)
-            if (!left.isNumeric() || !right.isNumeric())
-            {
-                logError(
-                        ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'."
-                );
-                return ErrorType.INSTANCE;
-            }
-
-            // Simple promotion
-            Type resultType = Type.getWiderType(left, right);
-            note(ctx, resultType);
-            return resultType;
+            return visit(ctx.multiplicativeExpression(0));
         }
-        return visitChildren(ctx);
+
+        // Visit left first.
+        Type leftType = visit(ctx.multiplicativeExpression(0));
+        if (leftType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        // Set expectation for the right operand to match left (if numeric).
+        Type old = expectedType;
+        if (leftType.isNumeric()) {
+            expectedType = leftType;
+        }
+
+        // Loop through all operands
+        for (int i = 1; i < ctx.multiplicativeExpression().size(); i++) {
+            Type rightType = visit(ctx.multiplicativeExpression(i));
+            if (rightType instanceof ErrorType) {
+                leftType = ErrorType.INSTANCE; // Propagate error
+                continue; // Continue visiting other children to find more errors
+            }
+
+            // Check for numeric compatibility
+            if (!leftType.isNumeric() || !rightType.isNumeric()) {
+                // Get the operator token
+                Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+                logError(opToken, "Arithmetic operator '" + opToken.getText() + "' cannot be applied to non-numeric types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+                leftType = ErrorType.INSTANCE;
+            } else {
+                // Promote for the next iteration
+                leftType = Type.getWiderType(leftType, rightType);
+                expectedType = leftType; // Update expectation for the *next* right operand
+            }
+        }
+
+        expectedType = old; // Restore original expectation
+        note(ctx, leftType); // Note the final result type
+        return leftType;
     }
 
     @Override
-    public Type visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
-    {
-        if (ctx.powerExpression().size() > 1)
-        {
-            Type left = visit(ctx.powerExpression(0));
-            Type right = visit(ctx.powerExpression(1));
-
-            if (!left.isNumeric() || !right.isNumeric())
-            {
-                logError(ctx.getChild(1).getPayload() instanceof Token ? (Token) ctx.getChild(1).getPayload() : ctx.start,
-                        "Arithmetic operator cannot be applied to non-numeric types '" + left.getName() + "' and '" + right.getName() + "'.");
-                return ErrorType.INSTANCE;
-            }
-            Type resultType = Type.getWiderType(left, right);
-            note(ctx, resultType);
-            return resultType;
+    public Type visitPowerExpression(NebulaParser.PowerExpressionContext ctx) {
+        if (ctx.unaryExpression().size() == 1) {
+            return visit(ctx.unaryExpression(0));
         }
-        return visitChildren(ctx);
+
+        Type leftType = visit(ctx.unaryExpression(0));
+        if (leftType instanceof ErrorType) return ErrorType.INSTANCE;
+
+        Type old = expectedType;
+        if (leftType.isNumeric()) {
+            expectedType = leftType;
+        }
+
+        // Loop through all operands
+        for (int i = 1; i < ctx.unaryExpression().size(); i++) {
+            Type rightType = visit(ctx.unaryExpression(i));
+            if (rightType instanceof ErrorType) {
+                leftType = ErrorType.INSTANCE;
+                continue;
+            }
+
+            if (!leftType.isNumeric() || !rightType.isNumeric()) {
+                Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+                logError(opToken, "Arithmetic operator '**' cannot be applied to non-numeric types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+                leftType = ErrorType.INSTANCE;
+            } else {
+                // Promote for the next iteration
+                leftType = Type.getWiderType(leftType, rightType);
+                expectedType = leftType;
+            }
+        }
+
+        expectedType = old;
+        note(ctx, leftType);
+        return leftType;
     }
 
 

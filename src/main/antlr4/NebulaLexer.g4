@@ -198,7 +198,7 @@ FLOAT_LITERAL
     :   '-'? (
             DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
         |   '.' DECIMAL_DIGITS EXPONENT?
-        |   DECIMAL_DIGITS? EXPONENT?
+        |   DECIMAL_DIGITS EXPONENT?
         ) [fF]
     ;
 

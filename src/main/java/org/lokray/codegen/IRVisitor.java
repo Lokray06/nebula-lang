@@ -241,7 +241,63 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 	}
 
-	@Override
+    @Override
+    public LLVMValueRef visitPowerExpression(NebulaParser.PowerExpressionContext ctx) {
+        if (ctx.unaryExpression().size() == 1) {
+            return visit(ctx.unaryExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.unaryExpression(0));
+
+        // Get the final expected type for the whole expression
+        Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+        if (resultTypeOpt.isEmpty() || !resultTypeOpt.get().isNumeric()) {
+            org.lokray.util.Debug.logError("IR: Power expression type not found or not numeric.");
+            return null;
+        }
+        LLVMTypeRef resultLLVMType = org.lokray.codegen.TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+        // Cast left operand to the final result type
+        LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "pow_lhs_cast");
+
+        // NOTE: LLVM does not have a built-in power instruction.
+        // We must call the C standard library function 'pow' (usually for double).
+
+        if (org.bytedeco.llvm.global.LLVM.LLVMGetTypeKind(resultLLVMType) != org.bytedeco.llvm.global.LLVM.LLVMDoubleTypeKind) {
+            org.lokray.util.Debug.logWarning("IR: Power operator (**) is only implemented for double, falling back to basic implementation for: " + resultTypeOpt.get().getName());
+            // For simplicity, we only implement the left side for now.
+            return leftCasted;
+        }
+
+        // Ensure 'pow' function is declared
+        LLVMValueRef powFunc = org.bytedeco.llvm.global.LLVM.LLVMGetNamedFunction(module, "pow");
+        if (powFunc == null) {
+            LLVMTypeRef doubleType = org.bytedeco.llvm.global.LLVM.LLVMDoubleTypeInContext(moduleContext);
+            LLVMTypeRef[] paramTypes = {doubleType, doubleType};
+            LLVMTypeRef funcType = org.bytedeco.llvm.global.LLVM.LLVMFunctionType(doubleType, new org.bytedeco.javacpp.PointerPointer<>(paramTypes), 2, 0);
+            powFunc = org.bytedeco.llvm.global.LLVM.LLVMAddFunction(module, "pow", funcType);
+        }
+
+
+        for (int i = 1; i < ctx.unaryExpression().size(); i++) {
+            LLVMValueRef rightVal = visit(ctx.unaryExpression(i));
+            if (leftCasted == null || rightVal == null) return null;
+
+            // Cast right operand to double (the expected type for pow)
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "pow_rhs_cast");
+
+            // Build the function call: pow(leftCasted, rightCasted)
+            LLVMValueRef[] args = {leftCasted, rightCasted};
+            LLVMValueRef powResult = org.bytedeco.llvm.global.LLVM.LLVMBuildCall2(builder, org.bytedeco.llvm.global.LLVM.LLVMGetCalledFunctionType(powFunc), powFunc, new org.bytedeco.javacpp.PointerPointer<>(args), 2, "pow_tmp");
+
+            // The result of pow becomes the new left operand for the next exponentiation
+            leftCasted = powResult;
+        }
+
+        return leftCasted;
+    }
+
+    @Override
 	public LLVMValueRef visitForStatement(NebulaParser.ForStatementContext ctx)
 	{
 		Optional<Object> loopInfoOpt = semanticAnalyzer.getResolvedInfo(ctx); 
@@ -1054,105 +1110,121 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	 * Handles expressions that are method calls (e.g., getPi()) or variable
 	 * lookups (e.g., fPi).
 	 */
-	@Override
-	public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
-	{
-		// Check if the *entire* postfix expression (e.g., "getPi()")
-		// was resolved to a MethodSymbol by the TypeCheckVisitor.
-		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+    @Override
+    public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
+    {
+        // --- START NEW LOGGING ---
+        Debug.logDebug("IR (Postfix): Visiting: " + ctx.getText() +
+                " (Hash: " + ctx.hashCode() +
+                ", Interval: " + ctx.getSourceInterval() + ")");
+        // --- END NEW LOGGING ---
 
-		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
-		{
-			// --- This is a method call used as an expression ---
-			Debug.logWarning("IR (Postfix): Resolved as method call: " + methodSymbol);
+        // Check if the *entire* postfix expression (e.g., "getPi()")
+        // was resolved to a MethodSymbol by the TypeCheckVisitor.
+        Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 
-			String mangledName = methodSymbol.getMangledName();
-			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
+        if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
+        {
+            // --- This is a method call used as an expression ---
+            Debug.logWarning("IR (Postfix): Resolved as method call: " + methodSymbol);
 
-			// 1. Create Function Prototype if it doesn't exist
-			if (function == null)
-			{
-				Debug.logWarning("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
-				List<Type> paramTypes = methodSymbol.getParameterTypes();
-				LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
-				for (int i = 0; i < paramTypes.size(); i++)
-				{
-					llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext);
-				}
-				LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType(), moduleContext);
-				LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
-				function = LLVMAddFunction(module, mangledName, functionType);
-			}
+            String mangledName = methodSymbol.getMangledName();
+            LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
 
-			// 2. Prepare arguments
-			List<LLVMValueRef> args = new ArrayList<>();
-            List<Type> expectedParamTypes = methodSymbol.getParameterTypes(); // <--- Get expected types
-			// Find the ArgumentListContext child node
-			NebulaParser.ArgumentListContext argListCtx = null;
-			for (int i = 0; i < ctx.getChildCount(); i++)
-			{
-				if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
-				{
-					argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
-					break;
-				}
-			}
+            // 1. Create Function Prototype if it doesn't exist [cite: 1447]
+            if (function == null)
+            {
+                Debug.logWarning("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
+                List<Type> paramTypes = methodSymbol.getParameterTypes();
+                LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
+                for (int i = 0; i < paramTypes.size(); i++)
+                {
+                    llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext);
+                }
+                LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType(), moduleContext);
+                LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
+                function = LLVMAddFunction(module, mangledName, functionType);
+            }
+
+            // 2. Prepare arguments [cite: 1447]
+            List<LLVMValueRef> args = new ArrayList<>();
+            List<Type> expectedParamTypes = methodSymbol.getParameterTypes(); // <--- Get expected types [cite: 1448]
+            // Find the ArgumentListContext child node
+            NebulaParser.ArgumentListContext argListCtx = null;
+            for (int i = 0; i < ctx.getChildCount(); i++) // [cite: 1448]
+            {
+                if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
+                {
+                    argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
+                    break;
+                }
+            }
 
             if (argListCtx != null)
             {
                 Debug.logWarning("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
-                for (int i = 0; i < argListCtx.expression().size(); i++)
+                for (int i = 0; i < argListCtx.expression().size(); i++) // [cite: 1449]
                 {
                     NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
+                    // --- START NEW LOGGING ---
+                    Debug.logDebug("IR (Postfix): Visiting argument #" + i + ": " + exprCtx.getText() +
+                            " (Hash: " + exprCtx.hashCode() +
+                            ", Interval: " + exprCtx.getSourceInterval() + ")");
+                    // --- END NEW LOGGING ---
                     LLVMValueRef argValue = visit(exprCtx);
 
-                    // --- NEW CONVERSION LOGIC ---
-                    if (i < expectedParamTypes.size() && argValue != null)
+                    // --- NEW CONVERSION LOGIC --- [cite: 1450]
+                    if (i < expectedParamTypes.size() && argValue != null) // [cite: 1450]
                     {
                         Type targetType = expectedParamTypes.get(i);
-                        LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext);
+                        LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext); // [cite: 1451]
                         LLVMTypeRef actualLLVMType = LLVMTypeOf(argValue);
 
-                        // Check if argument needs promotion/conversion (e.g., int to double)
-                        if (!actualLLVMType.equals(targetLLVMType))
+                        // Check if argument needs promotion/conversion (e.g., int to double) [cite: 1452]
+                        if (!actualLLVMType.equals(targetLLVMType)) // [cite: 1452]
                         {
-                            // This is a common conversion utility, assuming you have one or build one.
-                            // For int-to-double:
-                            if (LLVMGetTypeKind(actualLLVMType) == LLVMIntegerTypeKind &&
-                                    LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind)
+                            // This is a common conversion utility, assuming you have one or build one. [cite: 1453]
+                            // For int-to-double: [cite: 1453]
+                            if (LLVMGetTypeKind(actualLLVMType) == LLVMIntegerTypeKind && // [cite: 1453]
+                                    LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind) // [cite: 1454]
                             {
-                                // Convert Signed Integer to Floating Point
-                                argValue = LLVMBuildSIToFP(builder, argValue, targetLLVMType, "arg_sitofp");
+                                // Convert Signed Integer to Floating Point [cite: 1455]
+                                argValue = LLVMBuildSIToFP(builder, argValue, targetLLVMType, "arg_sitofp"); // [cite: 1455]
                             }
-                            // Add logic for int->float, float->double (fpext) if needed,
-                            // but int->double fixes this specific case.
+                            // Add logic for int->float, float->double (fpext) if needed, [cite: 1456]
+                            // but int->double fixes this specific case. [cite: 1456]
                         }
                     }
-                    // --- END CONVERSION LOGIC ---
+                    // --- END CONVERSION LOGIC --- [cite: 1457]
 
                     args.add(argValue);
                 }
             }
 
-			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
-			for (int i = 0; i < args.size(); i++)
-			{
-				argsPtr.put(i, args.get(i));
-			}
+            PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
+            for (int i = 0; i < args.size(); i++)
+            {
+                argsPtr.put(i, args.get(i));
+            }
 
-			// 3. Build the call instruction
-			Debug.logWarning("IR (Postfix): Building LLVM call instruction for: " + mangledName);
-			// This call *returns a value*, so we return the LLVMValueRef from the call.
-			return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), methodSymbol.getName() + ".call");
-		}
-		else
-		{
-			// --- Not a method call ---
-			// This is likely a variable access (like "fPi") or member access.
-			// Just visit the primary part to load the variable.
-			return visit(ctx.primary());
-		}
-	}
+            // 3. Build the call instruction [cite: 1458]
+            Debug.logWarning("IR (Postfix): Building LLVM call instruction for: " + mangledName);
+            // This call *returns a value*, so we return the LLVMValueRef from the call. [cite: 1458]
+            return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), methodSymbol.getName() + ".call");
+        }
+        else
+        {
+            // --- Not a method call ---
+            // This is likely a variable access (like "fPi") or member access. [cite: 1458]
+            // Just visit the primary part to load the variable. [cite: 1458]
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Postfix): Not a method call. Visiting Primary child: " + ctx.primary().getText() +
+                    " (Hash: " + ctx.primary().hashCode() +
+                    ", Interval: " + ctx.primary().getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
+            return visit(ctx.primary());
+        }
+    }
 
     @Override
     public LLVMValueRef visitCastExpression(NebulaParser.CastExpressionContext ctx)
@@ -1254,24 +1326,33 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
     @Override
     public LLVMValueRef visitPrimary(NebulaParser.PrimaryContext ctx)
     {
-        // 1) Literal: delegate
+        // --- START NEW LOGGING ---
+        Debug.logDebug("IR (Primary): Visiting: " + ctx.getText() +
+                " (Hash: " + ctx.hashCode() +
+                ", Interval: " + ctx.getSourceInterval() + ")");
+        // --- END NEW LOGGING ---
+
+        // 1) Literal: delegate [cite: 1475]
         if (ctx.literal() != null)
         {
-            return visit(ctx.literal());
+            return visit(ctx.literal()); // [cite: 1475]
         }
 
-        // 2) Parenthesized expression: ( expr )
+        // 2) Parenthesized expression: ( expr ) [cite: 1476]
         if (ctx.expression() != null)
         {
-            return visit(ctx.expression());
+            return visit(ctx.expression()); // [cite: 1476]
         }
 
-        // 3) Identifier usage
+        // 3) Identifier usage [cite: 1477]
         if (ctx.ID() != null)
         {
-            Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText());
+            Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText()); // [cite: 1477]
             String name = ctx.ID().getText();
-            Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Primary): Looking up symbol for ID '" + name + "' using context with Hash: " + ctx.hashCode() + ", Interval: " + ctx.getSourceInterval());
+            // --- END NEW LOGGING ---
+            Optional<Symbol> symOpt = semanticAnalyzer.getResolvedSymbol(ctx); // [cite: 1477]
 
             if (symOpt.isPresent())
             {
@@ -1279,149 +1360,152 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
                 if (sym instanceof VariableSymbol varSym)
                 {
-                    Debug.logDebug("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName());
+                    Debug.logDebug("Resolved:" + symOpt.get().getType().getName() + " " + symOpt.get().getName()); // [cite: 1478]
 
-                    // --- START FIX ---
-                    // Find the alloca for this variable using the scope-aware lookup
-                    LLVMValueRef alloca = lookupVariable(varSym.getName()); // Use scope-aware lookup
-                    // --- END FIX ---
+                    // --- START FIX --- [cite: 1478]
+                    // Find the alloca for this variable using the scope-aware lookup [cite: 1479]
+                    LLVMValueRef alloca = lookupVariable(varSym.getName()); // Use scope-aware lookup [cite: 1479]
+                    // --- END FIX --- [cite: 1479]
 
-                    if (alloca == null)
+                    if (alloca == null) // [cite: 1480]
                     {
-                        // --- MODIFIED ERROR ---
-                        // The old parameter-finding logic was unreliable.
-                        // If lookupVariable fails, the alloca is genuinely missing.
-                        Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?");
-                        return null;
-                        // --- END MODIFIED ERROR ---
+                        // --- MODIFIED ERROR --- [cite: 1480]
+                        // The old parameter-finding logic was unreliable. [cite: 1481]
+                        // If lookupVariable fails, the alloca is genuinely missing. [cite: 1481]
+                        Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?"); // [cite: 1481]
+                        return null; // [cite: 1481]
+                        // --- END MODIFIED ERROR --- [cite: 1481]
                     }
 
-                    // Load the variable value and return it
-                    LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext);
-                    LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load");
+                    // Load the variable value and return it [cite: 1482]
+                    LLVMTypeRef varType = TypeConverter.toLLVMType(varSym.getType(), moduleContext); // [cite: 1482]
+                    LLVMValueRef loaded = LLVMBuildLoad2(builder, varType, alloca, name + ".load"); // [cite: 1482]
                     return loaded;
                 }
-                else if (sym instanceof MethodSymbol)
+                else if (sym instanceof MethodSymbol) // [cite: 1483]
                 {
-                    // This is a method group (e.g., "getPi").
-                    // This is correct. The PostfixExpression visitor will handle the call.
-                    Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym);
+                    // This is a method group (e.g., "getPi"). [cite: 1484]
+                    // This is correct. The PostfixExpression visitor will handle the call. [cite: 1484]
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym); // [cite: 1484]
                     return null;
                 }
-                else
+                else // [cite: 1485]
                 {
-                    // Not a variable symbol (could be a type name, etc.)
-                    Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym);
+                    // Not a variable symbol (could be a type name, etc.) [cite: 1485]
+                    Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym); // [cite: 1485]
                     return null;
                 }
             }
-            else
+            else // [cite: 1486]
             {
-				/*
-	            LLVMValueRef alloca = lookupVariable(name);
-	            if (alloca != null)
-	            {
-		            // --- START FIX ---
-		            // If we found an alloca but not a symbol, we can
-		            // infer the type directly from the alloca itself.
-
-		            // 1. Get the type of the alloca (which is a pointer, e.g., double*)
-		            LLVMTypeRef allocaType = LLVMTypeOf(alloca);
-
-		            // 2. Get the element type of that pointer (e.g., double)
-		            LLVMTypeRef varType = LLVMGetElementType(allocaType);
-
-		            Debug.logWarning("IR: Fallback: Found alloca for '" + name + "' but no symbol. " +  "Loading with type from alloca: " + LLVMPrintTypeToString(varType));
-
-		            // 3. Load using the *correct* type
-		            return LLVMBuildLoad2(builder, varType, alloca, name + ".load");
-		            // --- END FIX ---
-	            }
-                Debug.logWarning("IR: No resolved symbol for primary '" + ctx.getText() + "' and not present in any scope."); //
-                */
-                return null; //
+                /* ... existing fallback comment ... */ // [cite: 1487-1490]
+                // --- START NEW LOGGING ---
+                Debug.logError("IR (Primary): FAILED TO RESOLVE SYMBOL for ID '" + name + "' using context Hash: " + ctx.hashCode() + ", Interval: " + ctx.getSourceInterval());
+                // --- END NEW LOGGING ---
+                return null; // [cite: 1490]
             }
         }
 
-        // 4) other primary forms (this, null, new, etc.) - simple fallback for now
-        return visitChildren(ctx);
+        // 4) other primary forms (this, null, new, etc.) - simple fallback for now [cite: 1491]
+        return visitChildren(ctx); // [cite: 1491]
     }
 
     @Override
     public LLVMValueRef visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
     {
+        // --- START NEW LOGGING ---
+        Debug.logDebug("IR (Multiplicative): Visiting: " + ctx.getText() +
+                " (Hash: " + ctx.hashCode() +
+                ", Interval: " + ctx.getSourceInterval() + ")");
+        // --- END NEW LOGGING ---
+
         if (ctx.powerExpression().size() == 1)
         {
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Multiplicative): Visiting single PowerExpression child: " + ctx.powerExpression(0).getText() +
+                    " (Hash: " + ctx.powerExpression(0).hashCode() +
+                    ", Interval: " + ctx.powerExpression(0).getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
             return visit(ctx.powerExpression(0));
         }
 
+        // --- START NEW LOGGING ---
+        Debug.logDebug("IR (Multiplicative): Visiting left PowerExpression child: " + ctx.powerExpression(0).getText() +
+                " (Hash: " + ctx.powerExpression(0).hashCode() +
+                ", Interval: " + ctx.powerExpression(0).getSourceInterval() + ")");
+        // --- END NEW LOGGING ---
         LLVMValueRef leftVal = visit(ctx.powerExpression(0));
 
         for (int i = 1; i < ctx.powerExpression().size(); i++)
         {
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Multiplicative): Visiting right PowerExpression child #" + i + ": " + ctx.powerExpression(i).getText() +
+                    " (Hash: " + ctx.powerExpression(i).hashCode() +
+                    ", Interval: " + ctx.powerExpression(i).getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
             LLVMValueRef rightVal = visit(ctx.powerExpression(i));
-            String op = ctx.getChild(2 * i - 1).getText(); // Get the operator (e.g., "*")
+            String op = ctx.getChild(2 * i - 1).getText(); // Get the operator (e.g., "*") [cite: 1493]
 
             if (leftVal == null || rightVal == null)
             {
                 return null;
             }
 
-            // 1. Get the final result type (determined by the type checker)
+            // 1. Get the final result type (determined by the type checker) [cite: 1494]
             Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
             if (resultTypeOpt.isEmpty())
             {
-                Debug.logError("IR: Multiplicative expression result type not found.");
-                return null;
+                Debug.logError("IR: Multiplicative expression result type not found."); // [cite: 1495]
+                return null; // [cite: 1495]
             }
             LLVMTypeRef resultLLVMType = TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
 
-            // 2. Cast operands to the result type
+            // 2. Cast operands to the result type [cite: 1495]
             LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "mult_lhs");
             LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "mult_rhs");
 
-            LLVMTypeRef finalType = LLVMTypeOf(leftCasted); // Now should be the common widest type
+            LLVMTypeRef finalType = LLVMTypeOf(leftCasted); // Now should be the common widest type [cite: 1496]
 
-            // 3. Select the operation based on the type
+            // 3. Select the operation based on the type [cite: 1496]
             if (LLVMGetTypeKind(finalType) == LLVMDoubleTypeKind || LLVMGetTypeKind(finalType) == LLVMFloatTypeKind)
             {
-                // Floating-point arithmetic
+                // Floating-point arithmetic [cite: 1497]
                 switch (op)
                 {
                     case "*":
-                        leftVal = LLVMBuildFMul(builder, leftCasted, rightCasted, "fmul_tmp");
+                        leftVal = LLVMBuildFMul(builder, leftCasted, rightCasted, "fmul_tmp"); // [cite: 1498]
                         break;
                     case "/":
                         leftVal = LLVMBuildFDiv(builder, leftCasted, rightCasted, "fdiv_tmp");
                         break;
                     case "%":
-                        leftVal = LLVMBuildFRem(builder, leftCasted, rightCasted, "frem_tmp");
+                        leftVal = LLVMBuildFRem(builder, leftCasted, rightCasted, "frem_tmp"); // [cite: 1499]
                         break;
                     default:
                         Debug.logError("IR: Unknown FP multiplicative operator: " + op);
                         return null;
                 }
             }
-            else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind)
+            else if (LLVMGetTypeKind(finalType) == LLVMIntegerTypeKind) // [cite: 1500]
             {
-                // Integer arithmetic (assuming signed for Div and Rem)
+                // Integer arithmetic (assuming signed for Div and Rem) [cite: 1501]
                 switch (op)
                 {
                     case "*":
-                        leftVal = LLVMBuildMul(builder, leftCasted, rightCasted, "mul_tmp");
+                        leftVal = LLVMBuildMul(builder, leftCasted, rightCasted, "mul_tmp"); // [cite: 1502]
                         break;
                     case "/":
-                        leftVal = LLVMBuildSDiv(builder, leftCasted, rightCasted, "sdiv_tmp"); // Signed division
-                        break;
+                        leftVal = LLVMBuildSDiv(builder, leftCasted, rightCasted, "sdiv_tmp"); // Signed division // [cite: 1503]
+                        break; // [cite: 1503]
                     case "%":
-                        leftVal = LLVMBuildSRem(builder, leftCasted, rightCasted, "srem_tmp"); // Signed remainder
+                        leftVal = LLVMBuildSRem(builder, leftCasted, rightCasted, "srem_tmp"); // Signed remainder [cite: 1503]
                         break;
                     default:
-                        Debug.logError("IR: Unknown Int multiplicative operator: " + op);
+                        Debug.logError("IR: Unknown Int multiplicative operator: " + op); // [cite: 1504]
                         return null;
                 }
             }
-            else
+            else // [cite: 1505]
             {
                 Debug.logError("IR: Unsupported types for multiplicative operation.");
                 return null;
@@ -1429,6 +1513,317 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
         }
 
         return leftVal; // Return the final accumulated value
+    }
+
+    @Override
+    public LLVMValueRef visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx) {
+        if (ctx.logicalAndExpression().size() == 1) {
+            return visit(ctx.logicalAndExpression(0));
+        }
+
+        LLVMTypeRef i1Type = LLVMInt1TypeInContext(moduleContext);
+        LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
+        // Get the function (LLVMValueRef) from the current block
+        LLVMValueRef entryFunction = LLVMGetBasicBlockParent(currentBlock);
+
+        LLVMBasicBlockRef endBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "lor.end");
+
+        LLVMValueRef phi = LLVMBuildPhi(builder, i1Type, "lor.phi");
+
+        // Visit the first operand
+        LLVMValueRef leftVal = visit(ctx.logicalAndExpression(0));
+        LLVMValueRef leftBool = TypeConverter.toBoolean(leftVal, null, moduleContext, builder);
+        currentBlock = LLVMGetInsertBlock(builder);
+
+        // FIX: Add Incoming Call 1: Wrap single value/block in PointerPointers and specify count=1
+        LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(leftBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+
+        for (int i = 1; i < ctx.logicalAndExpression().size(); i++) {
+            LLVMBasicBlockRef nextOperandBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "lor.next");
+
+            LLVMBuildCondBr(builder, leftBool, endBlock, nextOperandBlock);
+
+            LLVMPositionBuilderAtEnd(builder, nextOperandBlock);
+            LLVMValueRef rightVal = visit(ctx.logicalAndExpression(i));
+
+            LLVMValueRef rightBool = TypeConverter.toBoolean(rightVal, null, moduleContext, builder);
+            currentBlock = LLVMGetInsertBlock(builder);
+
+            // FIX: Add Incoming Call 2: Wrap single value/block in PointerPointers and specify count=1
+            LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(rightBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+
+            LLVMBuildBr(builder, endBlock);
+
+            leftBool = rightBool;
+        }
+
+        LLVMPositionBuilderAtEnd(builder, endBlock);
+
+        return phi;
+    }
+
+    @Override
+    public LLVMValueRef visitLogicalAndExpression(NebulaParser.LogicalAndExpressionContext ctx) {
+        if (ctx.bitwiseOrExpression().size() == 1) {
+            return visit(ctx.bitwiseOrExpression(0));
+        }
+
+        LLVMTypeRef i1Type = LLVMInt1TypeInContext(moduleContext);
+        LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
+        // Get the function (LLVMValueRef) from the current block
+        LLVMValueRef entryFunction = LLVMGetBasicBlockParent(currentBlock);
+
+        LLVMBasicBlockRef endBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "land.end");
+
+        LLVMValueRef phi = LLVMBuildPhi(builder, i1Type, "land.phi");
+
+        // Visit the first operand
+        LLVMValueRef leftVal = visit(ctx.bitwiseOrExpression(0));
+        LLVMValueRef leftBool = TypeConverter.toBoolean(leftVal, null, moduleContext, builder);
+        currentBlock = LLVMGetInsertBlock(builder);
+
+        // FIX: Add Incoming Call 3: Wrap single value/block in PointerPointers and specify count=1
+        LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(leftBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+
+        for (int i = 1; i < ctx.bitwiseOrExpression().size(); i++) {
+            LLVMBasicBlockRef nextOperandBlock = LLVMAppendBasicBlockInContext(moduleContext, entryFunction, "land.next");
+
+            LLVMBuildCondBr(builder, leftBool, nextOperandBlock, endBlock);
+
+            LLVMPositionBuilderAtEnd(builder, nextOperandBlock);
+            LLVMValueRef rightVal = visit(ctx.bitwiseOrExpression(i));
+
+            LLVMValueRef rightBool = TypeConverter.toBoolean(rightVal, null, moduleContext, builder);
+            currentBlock = LLVMGetInsertBlock(builder);
+
+            // FIX: Add Incoming Call 4: Wrap single value/block in PointerPointers and specify count=1
+            LLVMAddIncoming(phi, new PointerPointer<LLVMValueRef>(rightBool), new PointerPointer<LLVMBasicBlockRef>(currentBlock), 1);
+
+            LLVMBuildBr(builder, endBlock);
+
+            leftBool = rightBool;
+        }
+
+        LLVMPositionBuilderAtEnd(builder, endBlock);
+
+        return phi;
+    }
+
+    @Override
+    public LLVMValueRef visitBitwiseOrExpression(NebulaParser.BitwiseOrExpressionContext ctx) {
+        if (ctx.bitwiseXorExpression().size() == 1) {
+            return visit(ctx.bitwiseXorExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.bitwiseXorExpression(0));
+
+        // Get the final expected type for the whole expression
+        Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+        if (resultTypeOpt.isEmpty() || !(resultTypeOpt.get().isInteger())) {
+            org.lokray.util.Debug.logError("IR: BitwiseOr expression type not found or not integer.");
+            return null;
+        }
+        LLVMTypeRef resultLLVMType = org.lokray.codegen.TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+        // Cast left operand to the final result type
+        LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "or_lhs_cast");
+
+        for (int i = 1; i < ctx.bitwiseXorExpression().size(); i++) {
+            LLVMValueRef rightVal = visit(ctx.bitwiseXorExpression(i));
+            if (leftCasted == null || rightVal == null) return null;
+
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "or_rhs_cast");
+
+            leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildOr(builder, leftCasted, rightCasted, "or_tmp");
+        }
+        return leftCasted;
+    }
+
+    @Override
+    public LLVMValueRef visitBitwiseXorExpression(NebulaParser.BitwiseXorExpressionContext ctx) {
+        if (ctx.bitwiseAndExpression().size() == 1) {
+            return visit(ctx.bitwiseAndExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.bitwiseAndExpression(0));
+
+        Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+        if (resultTypeOpt.isEmpty() || !(resultTypeOpt.get().isInteger())) {
+            org.lokray.util.Debug.logError("IR: BitwiseXor expression type not found or not integer.");
+            return null;
+        }
+        LLVMTypeRef resultLLVMType = org.lokray.codegen.TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+        LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "xor_lhs_cast");
+
+        for (int i = 1; i < ctx.bitwiseAndExpression().size(); i++) {
+            LLVMValueRef rightVal = visit(ctx.bitwiseAndExpression(i));
+            if (leftCasted == null || rightVal == null) return null;
+
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "xor_rhs_cast");
+
+            leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildXor(builder, leftCasted, rightCasted, "xor_tmp");
+        }
+        return leftCasted;
+    }
+
+    @Override
+    public LLVMValueRef visitBitwiseAndExpression(NebulaParser.BitwiseAndExpressionContext ctx) {
+        if (ctx.equalityExpression().size() == 1) {
+            return visit(ctx.equalityExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.equalityExpression(0));
+
+        Optional<org.lokray.semantic.type.Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+        if (resultTypeOpt.isEmpty() || !(resultTypeOpt.get().isInteger())) {
+            org.lokray.util.Debug.logError("IR: BitwiseAnd expression type not found or not integer.");
+            return null;
+        }
+        LLVMTypeRef resultLLVMType = org.lokray.codegen.TypeConverter.toLLVMType(resultTypeOpt.get(), moduleContext);
+
+        LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "and_lhs_cast");
+
+        for (int i = 1; i < ctx.equalityExpression().size(); i++) {
+            LLVMValueRef rightVal = visit(ctx.equalityExpression(i));
+            if (leftCasted == null || rightVal == null) return null;
+
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "and_rhs_cast");
+
+            leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildAnd(builder, leftCasted, rightCasted, "and_tmp");
+        }
+        return leftCasted;
+    }
+
+    @Override
+    public LLVMValueRef visitShiftExpression(NebulaParser.ShiftExpressionContext ctx) {
+        if (ctx.additiveExpression().size() == 1) {
+            return visit(ctx.additiveExpression(0));
+        }
+
+        LLVMValueRef leftVal = visit(ctx.additiveExpression(0));
+
+        // Get the type of the left-hand side, which determines the result type
+        Optional<org.lokray.semantic.type.Type> leftTypeOpt = semanticAnalyzer.getResolvedType(ctx.additiveExpression(0));
+        if (leftTypeOpt.isEmpty() || !(leftTypeOpt.get().isInteger())) {
+            org.lokray.util.Debug.logError("IR: Shift expression left operand type not found or not integer.");
+            return null;
+        }
+        LLVMTypeRef resultLLVMType = org.lokray.codegen.TypeConverter.toLLVMType(leftTypeOpt.get(), moduleContext);
+
+        // This logic depends on TypeConverter/Type information, assuming it's available.
+        boolean isUnsigned = leftTypeOpt.get().getName().startsWith("u");
+
+        LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "sh_lhs_cast");
+
+        for (int i = 1; i < ctx.additiveExpression().size(); i++) {
+            LLVMValueRef rightVal = visit(ctx.additiveExpression(i));
+            String op = ctx.getChild(2 * i - 1).getText();
+
+            if (leftCasted == null || rightVal == null) return null;
+
+            // Get type of right operand for casting purposes
+            Optional<org.lokray.semantic.type.Type> rightTypeOpt = semanticAnalyzer.getResolvedType(ctx.additiveExpression(i));
+            if (rightTypeOpt.isEmpty() || !(rightTypeOpt.get().isInteger())) {
+                org.lokray.util.Debug.logError("IR: Shift expression right operand type not found or not integer.");
+                return null;
+            }
+
+            // Shift amount (right side) MUST match the type of the left side (resultLLVMType)
+            LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "sh_rhs_cast");
+
+            switch (op) {
+                case "<<":
+                    leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildShl(builder, leftCasted, rightCasted, "shl_tmp");
+                    break;
+                case ">>":
+                    if (isUnsigned) {
+                        leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildLShr(builder, leftCasted, rightCasted, "lshr_tmp"); // Logical Shift Right
+                    } else {
+                        leftCasted = org.bytedeco.llvm.global.LLVM.LLVMBuildAShr(builder, leftCasted, rightCasted, "ashr_tmp"); // Arithmetic Shift Right
+                    }
+                    break;
+                default:
+                    org.lokray.util.Debug.logError("IR: Unknown shift operator: " + op);
+                    return null;
+            }
+        }
+        return leftCasted;
+    }
+
+    @Override
+    public LLVMValueRef visitUnaryExpression(NebulaParser.UnaryExpressionContext ctx) {
+        // --- START NEW LOGGING ---
+        Debug.logDebug("IR (Unary): Visiting: " + ctx.getText() +
+                " (Hash: " + ctx.hashCode() +
+                ", Interval: " + ctx.getSourceInterval() + ")");
+        // --- END NEW LOGGING ---
+
+        if (ctx.op != null) { // Check if there's a prefix operator
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Unary): Operator '" + ctx.op.getText() + "' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+                    " (Hash: " + ctx.unaryExpression().hashCode() +
+                    ", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
+            LLVMValueRef operand = visit(ctx.unaryExpression());
+            if (operand == null) return null;
+
+            switch (ctx.op.getType()) {
+                case NebulaParser.ADD_OP:
+                    return operand; // Unary plus is usually a no-op
+                case NebulaParser.SUB_OP:
+                    LLVMTypeRef type = LLVMTypeOf(operand);
+                    if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind) {
+                        return LLVMBuildNeg(builder, operand, "neg_tmp");
+                    } else if (LLVMGetTypeKind(type) == LLVMFloatTypeKind || LLVMGetTypeKind(type) == LLVMDoubleTypeKind) {
+                        return LLVMBuildFNeg(builder, operand, "fneg_tmp");
+                    } else {
+                        Debug.logError("IR: Unary minus applied to non-numeric type: " + ctx.getText());
+                        return null;
+                    }
+                case NebulaParser.LOG_NOT_OP:
+                    // Convert operand to boolean (i1) if it isn't already
+                    LLVMValueRef boolOperand = TypeConverter.toBoolean(operand, null, moduleContext, builder); // Simplified context passing for now
+                    // XOR with true (1) to negate
+                    LLVMValueRef one = LLVMConstInt(LLVMInt1TypeInContext(moduleContext), 1, 0);
+                    return LLVMBuildXor(builder, boolOperand, one, "lognot_tmp");
+                case NebulaParser.BIT_NOT_OP:
+                    if (LLVMGetTypeKind(LLVMTypeOf(operand)) == LLVMIntegerTypeKind) {
+                        // LLVM's bitwise not is XOR with -1 (all bits set)
+                        LLVMValueRef minusOne = LLVMConstAllOnes(LLVMTypeOf(operand));
+                        return LLVMBuildXor(builder, operand, minusOne, "bitnot_tmp");
+                    } else {
+                        Debug.logError("IR: Bitwise NOT applied to non-integer type: " + ctx.getText());
+                        return null;
+                    }
+                case NebulaParser.INC_OP: // Pre-increment
+                case NebulaParser.DEC_OP: // Pre-decrement
+                    // These require finding the variable's alloca, loading, incrementing/decrementing, storing back, and returning the *new* value.
+                    // This logic is more complex and depends on the operand being a valid l-value (variable/field).
+                    // For now, let's skip implementation and log a warning.
+                    Debug.logWarning("IR: Pre-increment/decrement not yet fully implemented in IRVisitor for: " + ctx.getText());
+                    return operand; // Placeholder
+                default:
+                    Debug.logError("IR: Unknown unary operator: " + ctx.op.getText());
+                    return null;
+            }
+        } else if (ctx.castExpression() != null) {
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Unary): Visiting CastExpression child: " + ctx.castExpression().getText() +
+                    " (Hash: " + ctx.castExpression().hashCode() +
+                    ", Interval: " + ctx.castExpression().getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
+            return visit(ctx.castExpression());
+        } else if (ctx.postfixExpression() != null) {
+            // --- START NEW LOGGING ---
+            Debug.logDebug("IR (Unary): Visiting PostfixExpression child: " + ctx.postfixExpression().getText() +
+                    " (Hash: " + ctx.postfixExpression().hashCode() +
+                    ", Interval: " + ctx.postfixExpression().getSourceInterval() + ")");
+            // --- END NEW LOGGING ---
+            return visit(ctx.postfixExpression());
+        }
+        // Should not happen based on grammar
+        return null;
     }
 
     @Override
