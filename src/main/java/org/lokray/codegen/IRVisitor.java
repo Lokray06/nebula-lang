@@ -196,23 +196,23 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			{
 				Debug.logDebug("IR: Function prototype not found. Creating LLVM declaration for: " + mangledName);
 				// If not declared, create the function prototype.
-				List<Type> paramTypes = methodSymbol.getParameterTypes(); // [cite: 2310]
+				List<Type> paramTypes = methodSymbol.getParameterTypes(); 
 				LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
 				for (int i = 0; i < paramTypes.size(); i++)
 				{
-					llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext); // [cite: 3787]
+					llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i), moduleContext); 
 				}
 				LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType(), moduleContext); // [cite: 2309, 3787]
-				LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0); // [cite: 3763]
-				function = LLVMAddFunction(module, mangledName, functionType); // [cite: 3763]
+				LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0); 
+				function = LLVMAddFunction(module, mangledName, functionType); 
 			}
 
 			// --- 2. Prepare arguments for the call ---
 			List<LLVMValueRef> args = new ArrayList<>();
-			if (ctx.argumentList() != null) // [cite: 2400]
+			if (ctx.argumentList() != null) 
 			{
 				Debug.logDebug("IR: Processing " + ctx.argumentList().expression().size() + " arguments...");
-				for (NebulaParser.ExpressionContext exprCtx : ctx.argumentList().expression()) // [cite: 2443]
+				for (NebulaParser.ExpressionContext exprCtx : ctx.argumentList().expression()) 
 				{
 					// This recursively calls visitLiteral and correctly generates the string pointer
 					args.add(visit(exprCtx));
@@ -220,7 +220,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				Debug.logDebug("IR: Finished processing arguments.");
 			}
 
-			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size()); // [cite: 3763]
+			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size()); 
 			for (int i = 0; i < args.size(); i++)
 			{
 				argsPtr.put(i, args.get(i));
@@ -228,7 +228,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 			// --- 3. Build the call instruction ---
 			Debug.logDebug("IR: Building LLVM call instruction for: " + mangledName);
-			LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), ""); // [cite: 3781]
+			LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), ""); 
 			Debug.logDebug("IR: Call generation complete.");
 
 			return null; // A statement expression doesn't return a value.
@@ -237,97 +237,97 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		{
 			Debug.logDebug("IR: WARNING: Not a method call, or resolved symbol not found/not a MethodSymbol for context: " + ctx.getText() + ". Falling back to visitChildren.");
 			// Fallback for other statement expressions (assignments, increments, etc.)
-			return visitChildren(ctx); // [cite: 2845]
+			return visitChildren(ctx); 
 		}
 	}
 
 	@Override
 	public LLVMValueRef visitForStatement(NebulaParser.ForStatementContext ctx)
 	{
-		Optional<Object> loopInfoOpt = semanticAnalyzer.getResolvedInfo(ctx); // [cite: 2734]
+		Optional<Object> loopInfoOpt = semanticAnalyzer.getResolvedInfo(ctx); 
 
 		if (loopInfoOpt.isEmpty())
-		{ // [cite: 2734]
-			Debug.logError("Codegen Error: No valid loop information found for ForStatementContext: " + ctx.getText()); // [cite: 3783]
-			return null; // [cite: 3783]
+		{ 
+			Debug.logError("Codegen Error: No valid loop information found for ForStatementContext: " + ctx.getText()); 
+			return null; 
 		}
-		Object loopInfo = loopInfoOpt.get(); // [cite: 3783]
+		Object loopInfo = loopInfoOpt.get(); 
 
 		if (loopInfo instanceof SimplifiedForInfo info)
-		{ // [cite: 3783]
+		{ 
 			// --- SIMPLIFIED FOR LOOP ---
-			Debug.logDebug("Codegen: Simplified for loop (using Semantic Info): " + ctx.getText()); // [cite: 3767]
-			VariableSymbol loopVarSymbol = info.loopVariable(); // [cite: 3767]
-			String varName = loopVarSymbol.getName(); // [cite: 3767]
+			Debug.logDebug("Codegen: Simplified for loop (using Semantic Info): " + ctx.getText()); 
+			VariableSymbol loopVarSymbol = info.loopVariable(); 
+			String varName = loopVarSymbol.getName(); 
 			// *** FIX: Use loopVarSymbol's actual resolved type ***
 			Type loopVarNebulaType = loopVarSymbol.getType();
-			LLVMTypeRef varType = TypeConverter.toLLVMType(loopVarNebulaType, moduleContext); // [cite: 3767]
-			LLVMValueRef function = currentFunction; // [cite: 3768]
+			LLVMTypeRef varType = TypeConverter.toLLVMType(loopVarNebulaType, moduleContext); 
+			LLVMValueRef function = currentFunction; 
 
-			LLVMValueRef startVal; // [cite: 3768]
+			LLVMValueRef startVal; 
 			if (info.startExpression() != null)
-			{ // [cite: 3768]
-				startVal = visit(info.startExpression()); // [cite: 3768]
+			{ 
+				startVal = visit(info.startExpression()); 
 			}
 			else
 			{
-				startVal = LLVMConstInt(varType, 0, 0); // [cite: 3768]
+				startVal = LLVMConstInt(varType, 0, 0); 
 			}
 			if (startVal == null)
-			{ /* ... error handling ... */ // [cite: 3768]
-				return null; // [cite: 3768]
+			{ /* ... error handling ... */ 
+				return null; 
 			}
 
-			LLVMValueRef varAlloca = createEntryBlockAlloca(function, varType, varName); // [cite: 3768]
+			LLVMValueRef varAlloca = createEntryBlockAlloca(function, varType, varName); 
 			LLVMBuildStore(builder, startVal, varAlloca); // Initialize [cite: 3769]
 
 			Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues); // Backup scope [cite: 3769]
-			namedValues.put(varName, varAlloca); // [cite: 3769]
+			namedValues.put(varName, varAlloca); 
 
 			// --- Create Blocks --- [cite: 3769]
-			LLVMBasicBlockRef loopHeaderBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.header"); // [cite: 3769]
-			LLVMBasicBlockRef loopBodyBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.body"); // [cite: 3769]
-			LLVMBasicBlockRef loopExitBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.exit"); // [cite: 3769]
+			LLVMBasicBlockRef loopHeaderBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.header"); 
+			LLVMBasicBlockRef loopBodyBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.body"); 
+			LLVMBasicBlockRef loopExitBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "loop.exit"); 
 
 			LLVMBuildBr(builder, loopHeaderBlock); // Branch to Header [cite: 3769]
 
 			// --- Populate Header --- [cite: 3770]
-			LLVMPositionBuilderAtEnd(builder, loopHeaderBlock); // [cite: 3770]
-			LLVMValueRef currentVal = LLVMBuildLoad2(builder, varType, varAlloca, varName + ".load"); // [cite: 3770]
-			LLVMValueRef limitVal = visit(info.limitExpression()); // [cite: 3770]
+			LLVMPositionBuilderAtEnd(builder, loopHeaderBlock); 
+			LLVMValueRef currentVal = LLVMBuildLoad2(builder, varType, varAlloca, varName + ".load"); 
+			LLVMValueRef limitVal = visit(info.limitExpression()); 
 			if (limitVal == null)
-			{ /* ... error handling ... */ // [cite: 3770]
-				namedValues.clear(); // [cite: 3770]
-				namedValues.putAll(outerValues); // [cite: 3770]
-				return null; // [cite: 3770]
+			{ /* ... error handling ... */ 
+				namedValues.clear(); 
+				namedValues.putAll(outerValues); 
+				return null; 
 			}
 
 			// --- Comparison --- [cite: 3770]
-			int llvmPredicate; // [cite: 3771]
+			int llvmPredicate; 
 			// *** FIX: Determine signedness from loop variable type ***
 			boolean isSigned = !loopVarNebulaType.getName().startsWith("u"); // Check if the Nebula type name starts with 'u'
-			String operator = info.operator().getText(); // [cite: 3771]
+			String operator = info.operator().getText(); 
 			switch (operator)
-			{ // [cite: 3771]
+			{ 
 				case "<":
 					llvmPredicate = isSigned ? LLVMIntSLT : LLVMIntULT;
-					break; // [cite: 3771]
+					break; 
 				case ">":
 					llvmPredicate = isSigned ? LLVMIntSGT : LLVMIntUGT;
-					break; // [cite: 3771]
+					break; 
 				case "<=":
 					llvmPredicate = isSigned ? LLVMIntSLE : LLVMIntULE;
-					break; // [cite: 3771]
+					break; 
 				case ">=":
 					llvmPredicate = isSigned ? LLVMIntSGE : LLVMIntUGE;
-					break; // [cite: 3772]
-				default: /* ... error handling ... */ // [cite: 3772]
-					namedValues.clear(); // [cite: 3772]
-					namedValues.putAll(outerValues); // [cite: 3772]
-					return null; // [cite: 3772]
+					break; 
+				default: /* ... error handling ... */ 
+					namedValues.clear(); 
+					namedValues.putAll(outerValues); 
+					return null; 
 			}
-			LLVMValueRef condition = LLVMBuildICmp(builder, llvmPredicate, currentVal, limitVal, "loop.cond"); // [cite: 3772]
-			LLVMBuildCondBr(builder, condition, loopBodyBlock, loopExitBlock); // [cite: 3772]
+			LLVMValueRef condition = LLVMBuildICmp(builder, llvmPredicate, currentVal, limitVal, "loop.cond"); 
+			LLVMBuildCondBr(builder, condition, loopBodyBlock, loopExitBlock); 
 
 			// --- Populate Body ---
 			LLVMPositionBuilderAtEnd(builder, loopBodyBlock);
@@ -365,119 +365,119 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 
 			// --- Exit Block --- [cite: 3773]
-			LLVMPositionBuilderAtEnd(builder, loopExitBlock); // [cite: 3773]
+			LLVMPositionBuilderAtEnd(builder, loopExitBlock); 
 			namedValues.clear(); // Restore outer scope [cite: 3774]
-			namedValues.putAll(outerValues); // [cite: 3774]
+			namedValues.putAll(outerValues); 
 
-			Debug.logDebug("Codegen: Finished simplified for loop (using Semantic Info): " + ctx.getText()); // [cite: 3774]
-			return null; // [cite: 3774]
+			Debug.logDebug("Codegen: Finished simplified for loop (using Semantic Info): " + ctx.getText()); 
+			return null; 
 
 		}
 		else if (loopInfo instanceof TraditionalForInfo info)
-		{ // [cite: 3774]
+		{ 
 			// --- TRADITIONAL FOR LOOP ---
 			// ... (existing traditional for loop codegen remains the same) ... [cite: 3774-3783]
-			Debug.logDebug("Codegen: Traditional for loop (using Semantic Info): " + ctx.getText()); // [cite: 3774]
-			LLVMValueRef function = currentFunction; // [cite: 3774]
-			Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues); // [cite: 3774] // Backup outer scope
+			Debug.logDebug("Codegen: Traditional for loop (using Semantic Info): " + ctx.getText()); 
+			LLVMValueRef function = currentFunction; 
+			Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);  // Backup outer scope
 
 			// --- 1. Initializer --- [cite: 3775]
 			if (info.initializer() != null)
-			{ // [cite: 3775]
+			{ 
 				if (info.initializer() instanceof NebulaParser.VariableDeclarationContext varDeclCtx)
-				{ // [cite: 3775]
-					visitVariableDeclarationForLoopInit(varDeclCtx); // [cite: 3775]
+				{ 
+					visitVariableDeclarationForLoopInit(varDeclCtx); 
 				}
 				else if (info.initializer() instanceof NebulaParser.ExpressionContext exprCtx)
-				{ // [cite: 3776]
+				{ 
 					visit(exprCtx); // Execute initializer expression [cite: 3776]
 				}
 			}
 
 			// --- 2. Create Blocks --- [cite: 3776]
-			LLVMBasicBlockRef loopHeaderBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.cond"); // [cite: 3776]
-			LLVMBasicBlockRef loopBodyBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.body"); // [cite: 3776]
-			LLVMBasicBlockRef loopUpdateBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.update"); // [cite: 3776]
-			LLVMBasicBlockRef loopExitBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.exit"); // [cite: 3776]
+			LLVMBasicBlockRef loopHeaderBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.cond"); 
+			LLVMBasicBlockRef loopBodyBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.body"); 
+			LLVMBasicBlockRef loopUpdateBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.update"); 
+			LLVMBasicBlockRef loopExitBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "for.exit"); 
 
 			LLVMBuildBr(builder, loopHeaderBlock); // Branch to Header [cite: 3776]
 
 			// --- 4. Populate Header Block --- [cite: 3777]
-			LLVMPositionBuilderAtEnd(builder, loopHeaderBlock); // [cite: 3777]
-			LLVMValueRef conditionValue; // [cite: 3777]
+			LLVMPositionBuilderAtEnd(builder, loopHeaderBlock); 
+			LLVMValueRef conditionValue; 
 			if (info.condition() != null)
-			{ // [cite: 3777]
-				conditionValue = visit(info.condition()); // [cite: 3777]
+			{ 
+				conditionValue = visit(info.condition()); 
 				if (conditionValue == null)
-				{ /* ... error handling ... */ // [cite: 3777]
-					namedValues.clear(); // [cite: 3777]
-					namedValues.putAll(outerValues); // [cite: 3777]
-					return null; // [cite: 3777]
+				{ /* ... error handling ... */ 
+					namedValues.clear(); 
+					namedValues.putAll(outerValues); 
+					return null; 
 				}
-				Optional<Type> condNebulaTypeOpt = semanticAnalyzer.getResolvedType(info.condition()); // [cite: 3778]
+				Optional<Type> condNebulaTypeOpt = semanticAnalyzer.getResolvedType(info.condition()); 
 				if (condNebulaTypeOpt.isPresent() && condNebulaTypeOpt.get() == PrimitiveType.BOOLEAN)
-				{ // [cite: 3778]
+				{ 
 					// It's already i1, use directly [cite: 3778]
 				}
 				else
 				{
-					LLVMTypeRef condLLVMType = LLVMTypeOf(conditionValue); // [cite: 3778]
+					LLVMTypeRef condLLVMType = LLVMTypeOf(conditionValue); 
 					if (LLVMGetTypeKind(condLLVMType) == LLVMIntegerTypeKind)
-					{ // [cite: 3778]
-						LLVMValueRef zero = LLVMConstNull(condLLVMType); // [cite: 3779]
-						conditionValue = LLVMBuildICmp(builder, LLVMIntNE, conditionValue, zero, "tobool"); // [cite: 3779]
+					{ 
+						LLVMValueRef zero = LLVMConstNull(condLLVMType); 
+						conditionValue = LLVMBuildICmp(builder, LLVMIntNE, conditionValue, zero, "tobool"); 
 					}
 					else
 					{
-						LLVMValueRef zero = LLVMConstNull(condLLVMType); // [cite: 3779]
+						LLVMValueRef zero = LLVMConstNull(condLLVMType); 
 						if (LLVMGetTypeKind(condLLVMType) == LLVMFloatTypeKind || LLVMGetTypeKind(condLLVMType) == LLVMDoubleTypeKind)
-						{ // [cite: 3780]
-							conditionValue = LLVMBuildFCmp(builder, LLVMRealONE, conditionValue, zero, "tobool_fp"); // [cite: 3780]
+						{ 
+							conditionValue = LLVMBuildFCmp(builder, LLVMRealONE, conditionValue, zero, "tobool_fp"); 
 						}
 						else
 						{
-							conditionValue = LLVMBuildICmp(builder, LLVMIntNE, conditionValue, zero, "tobool_ptr"); // [cite: 3780]
+							conditionValue = LLVMBuildICmp(builder, LLVMIntNE, conditionValue, zero, "tobool_ptr"); 
 						}
-						Debug.logWarning("Codegen Warning: Condition in traditional for loop isn't bool/int. Using != zero/null comparison."); // [cite: 3781]
+						Debug.logWarning("Codegen Warning: Condition in traditional for loop isn't bool/int. Using != zero/null comparison."); 
 					}
 				}
 			}
 			else
 			{
-				conditionValue = LLVMConstInt(LLVMInt1TypeInContext(moduleContext), 1, 0); // [cite: 3781]
+				conditionValue = LLVMConstInt(LLVMInt1TypeInContext(moduleContext), 1, 0); 
 			}
 			LLVMBuildCondBr(builder, conditionValue, loopBodyBlock, loopExitBlock); // Branch [cite: 3781]
 
 			// --- 5. Populate Body Block --- [cite: 3781]
-			LLVMPositionBuilderAtEnd(builder, loopBodyBlock); // [cite: 3781]
+			LLVMPositionBuilderAtEnd(builder, loopBodyBlock); 
 			visit(ctx.block()); // Visit loop body [cite: 3782]
 			if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null)
 			{ // Branch to update if not terminated [cite: 3782]
-				LLVMBuildBr(builder, loopUpdateBlock); // [cite: 3782]
+				LLVMBuildBr(builder, loopUpdateBlock); 
 			}
 
 			// --- 6. Populate Update Block --- [cite: 3782]
-			LLVMPositionBuilderAtEnd(builder, loopUpdateBlock); // [cite: 3782]
+			LLVMPositionBuilderAtEnd(builder, loopUpdateBlock); 
 			if (info.update() != null)
-			{ // [cite: 3782]
+			{ 
 				visit(info.update()); // Generate update code from info [cite: 3782]
 			}
 			if (LLVMGetBasicBlockTerminator(LLVMGetInsertBlock(builder)) == null)
 			{ // Branch to header if not terminated [cite: 3782]
-				LLVMBuildBr(builder, loopHeaderBlock); // [cite: 3783]
+				LLVMBuildBr(builder, loopHeaderBlock); 
 			}
 
 			// --- 7. Position Builder at Exit Block --- [cite: 3783]
-			LLVMPositionBuilderAtEnd(builder, loopExitBlock); // [cite: 3783]
+			LLVMPositionBuilderAtEnd(builder, loopExitBlock); 
 			namedValues.clear(); // Restore outer scope [cite: 3783]
-			namedValues.putAll(outerValues); // [cite: 3783]
-			Debug.logDebug("Codegen: Finished traditional for loop (using Semantic Info): " + ctx.getText()); // [cite: 3783]
-			return null; // [cite: 3783]
+			namedValues.putAll(outerValues); 
+			Debug.logDebug("Codegen: Finished traditional for loop (using Semantic Info): " + ctx.getText()); 
+			return null; 
 		}
 		else
 		{
-			Debug.logError("Codegen Error: No valid loop information found for ForStatementContext: " + ctx.getText()); // [cite: 3783]
-			return null; // [cite: 3783]
+			Debug.logError("Codegen Error: No valid loop information found for ForStatementContext: " + ctx.getText()); 
+			return null; 
 		}
 	}
 

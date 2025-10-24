@@ -757,44 +757,44 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
     @Override
     public Type visitForStatement(NebulaParser.ForStatementContext ctx)
     {
-        Scope forScope = new Scope(currentScope); // [cite: 2550]
-        currentScope = forScope; // [cite: 2550]
+        Scope forScope = new Scope(currentScope); 
+        currentScope = forScope; 
 
         if (ctx.simplifiedForClause() != null)
-        { // [cite: 2550]
-            NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause(); // [cite: 2550]
-            String varName = simplifiedCtx.ID().getText(); // [cite: 2550]
+        { 
+            NebulaParser.SimplifiedForClauseContext simplifiedCtx = ctx.simplifiedForClause(); 
+            String varName = simplifiedCtx.ID().getText(); 
 
             // --- 1. Define expressions and default types ---
-            Type defaultIntType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE); // [cite: 2550]
+            Type defaultIntType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE); 
 
-            NebulaParser.ExpressionContext startExprCtx = null; // [cite: 2551]
-            NebulaParser.ExpressionContext limitExprCtx; // [cite: 2551]
-            NebulaParser.RelationalOperatorContext operator = simplifiedCtx.relationalOperator(); // [cite: 2551]
+            NebulaParser.ExpressionContext startExprCtx = null; 
+            NebulaParser.ExpressionContext limitExprCtx; 
+            NebulaParser.RelationalOperatorContext operator = simplifiedCtx.relationalOperator(); 
 
             if (simplifiedCtx.expression().size() == 2)
             { // for(i = start op limit) [cite: 2551]
-                startExprCtx = simplifiedCtx.expression(0); // [cite: 2551]
-                limitExprCtx = simplifiedCtx.expression(1); // [cite: 2551]
+                startExprCtx = simplifiedCtx.expression(0); 
+                limitExprCtx = simplifiedCtx.expression(1); 
                 Type startType = visit(startExprCtx); // Type check start [cite: 2551]
                 if (!startType.isInteger())
-                { // [cite: 2551]
-                    logError(((ParserRuleContext) startExprCtx).getStart(), "Incompatible types in for loop initializer: expected an integer expression, but found '" + startType.getName() + "'."); // [cite: 2552]
+                { 
+                    logError(((ParserRuleContext) startExprCtx).getStart(), "Incompatible types in for loop initializer: expected an integer expression, but found '" + startType.getName() + "'."); 
                 }
             }
             else
             { // for(i op limit) [cite: 2552]
-                limitExprCtx = simplifiedCtx.expression(0); // [cite: 2552]
+                limitExprCtx = simplifiedCtx.expression(0); 
             }
 
             // --- 2. Resolve Limit Type ---
             Type limitType = visit(limitExprCtx); // Type check limit [cite: 2552]
 
             if (!limitType.isInteger())
-            { // [cite: 2552]
-                logError(((ParserRuleContext) limitExprCtx).getStart(), "Incompatible types in for loop limit: expected an integer expression, but found '" + limitType.getName() + "'."); // [cite: 2553]
+            { 
+                logError(((ParserRuleContext) limitExprCtx).getStart(), "Incompatible types in for loop limit: expected an integer expression, but found '" + limitType.getName() + "'."); 
                 // Fallback to default int type if the limit is not a valid integer type [cite: 2553]
-                limitType = defaultIntType; // [cite: 2553]
+                limitType = defaultIntType; 
             }
 
             // --- FIX: Add Semantic Check for Implicit Start with > or >= ---
@@ -806,7 +806,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             // --- END FIX ---
 
             // Set loop variable type directly from the limit type (if integer)
-            Type loopVarType = limitType; // [cite: 2553]
+            Type loopVarType = limitType; 
 
             // Define the loop variable with the resolved type (e.g., int64)
             VariableSymbol loopVar = new VariableSymbol(varName, loopVarType, false, true, false); //
@@ -824,39 +824,39 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         {
             // --- Traditional For --- [cite: 2555]
             // ... (existing traditional for loop logic remains the same) ... [cite: 2555-2558]
-            ParseTree initializer = null; // [cite: 2555]
-            NebulaParser.ExpressionContext conditionExprCtx = null; // [cite: 2555]
-            NebulaParser.ExpressionContext updateExprCtx = null; // [cite: 2555]
-            int expressionIndex = 0; // [cite: 2555]
+            ParseTree initializer = null; 
+            NebulaParser.ExpressionContext conditionExprCtx = null; 
+            NebulaParser.ExpressionContext updateExprCtx = null; 
+            int expressionIndex = 0; 
 
             // Handle initializer [cite: 2555]
             if (ctx.variableDeclaration() != null)
-            { // [cite: 2555]
-                initializer = ctx.variableDeclaration(); // [cite: 2555]
-                visit(initializer); // [cite: 2555]
+            { 
+                initializer = ctx.variableDeclaration(); 
+                visit(initializer); 
             }
             else if (ctx.expression() != null && !ctx.expression().isEmpty() && ctx.SEMI_SYM(0) != null)
-            { // [cite: 2556]
+            { 
                 if (ctx.expression(0).getStart().getTokenIndex() < ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
-                { // [cite: 2556]
-                    initializer = ctx.expression(expressionIndex++); // [cite: 2556]
-                    visit(initializer); // [cite: 2556]
+                { 
+                    initializer = ctx.expression(expressionIndex++); 
+                    visit(initializer); 
                 }
             }
 
             // Handle condition [cite: 2556]
             if (ctx.SEMI_SYM(0) != null && ctx.SEMI_SYM(1) != null)
-            { // [cite: 2556]
+            { 
                 if (ctx.expression().size() > expressionIndex)
-                { // [cite: 2556]
+                { 
                     if (ctx.expression(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(0).getSymbol().getTokenIndex())
-                    { // [cite: 2556]
-                        conditionExprCtx = ctx.expression(expressionIndex++); // [cite: 2557]
-                        Type conditionType = visit(conditionExprCtx); // [cite: 2557]
-                        Type boolType = globalScope.resolve("bool").map(Symbol::getType).orElse(ErrorType.INSTANCE); // [cite: 2557]
+                    { 
+                        conditionExprCtx = ctx.expression(expressionIndex++); 
+                        Type conditionType = visit(conditionExprCtx); 
+                        Type boolType = globalScope.resolve("bool").map(Symbol::getType).orElse(ErrorType.INSTANCE); 
                         if (!conditionType.isAssignableTo(boolType))
-                        { // [cite: 2557]
-                            logError(((ParserRuleContext) conditionExprCtx).getStart(), "For loop condition must be of type 'bool', but found '" + conditionType.getName() + "'."); // [cite: 2557]
+                        { 
+                            logError(((ParserRuleContext) conditionExprCtx).getStart(), "For loop condition must be of type 'bool', but found '" + conditionType.getName() + "'."); 
                         }
                     }
                 }
@@ -864,24 +864,24 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
             // Handle update [cite: 2557]
             if (ctx.expression().size() > expressionIndex)
-            { // [cite: 2557]
+            { 
                 if (ctx.SEMI_SYM(1) != null && ctx.expression(expressionIndex).getStart().getTokenIndex() > ctx.SEMI_SYM(1).getSymbol().getTokenIndex())
-                { // [cite: 2557]
-                    updateExprCtx = ctx.expression(expressionIndex); // [cite: 2557]
-                    visit(updateExprCtx); // [cite: 2558]
+                { 
+                    updateExprCtx = ctx.expression(expressionIndex); 
+                    visit(updateExprCtx); 
                 }
             }
 
             // Store the desugared info for the traditional loop [cite: 2558]
-            TraditionalForInfo info = new TraditionalForInfo(initializer, conditionExprCtx, updateExprCtx); // [cite: 2558]
-            noteInfo(ctx, info); // [cite: 2558]
+            TraditionalForInfo info = new TraditionalForInfo(initializer, conditionExprCtx, updateExprCtx); 
+            noteInfo(ctx, info); 
 
             visit(ctx.block()); // Visit body [cite: 2558]
-            System.out.println("SOMETHING'S VERY WRONG"); // [cite: 2558] This indicates an unexpected path, likely remove in final code.
+            System.out.println("SOMETHING'S VERY WRONG");  This indicates an unexpected path, likely remove in final code.
         }
 
-        currentScope = currentScope.getEnclosingScope(); // [cite: 2558]
-        return PrimitiveType.VOID; // [cite: 2558]
+        currentScope = currentScope.getEnclosingScope(); 
+        return PrimitiveType.VOID; 
     }
 
     @Override
@@ -1482,35 +1482,35 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
         {
         // ... (existing 'new' logic) ... [cite: 485-490]
             // This is a constructor call: new Person(...)
-            Type type = resolveType(ctx.type()); // [cite: 485]
-        if (!(type instanceof ClassType)) // [cite: 485]
+            Type type = resolveType(ctx.type()); 
+        if (!(type instanceof ClassType)) 
         {
-            logError(ctx.type().start, "Can only instantiate a class type."); // [cite: 486]
-            return ErrorType.INSTANCE; // [cite: 486]
+            logError(ctx.type().start, "Can only instantiate a class type."); 
+            return ErrorType.INSTANCE; 
         }
-            ClassSymbol classSymbol = ((ClassType) type).getClassSymbol(); // [cite: 486]
+            ClassSymbol classSymbol = ((ClassType) type).getClassSymbol(); 
 
             // Handle constructor call: new Person(args)
-        if (ctx.L_PAREN_SYM() != null) // [cite: 486]
+        if (ctx.L_PAREN_SYM() != null) 
         {
             // We pass `ctx` itself for error reporting
-            visitMethodCall(ctx, classSymbol, classSymbol.getName(), ctx.argumentList()); // [cite: 487]
+            visitMethodCall(ctx, classSymbol, classSymbol.getName(), ctx.argumentList()); 
         }
             // Handle array creation: new int[size]
-        else if (ctx.L_BRACK_SYM() != null) // [cite: 488]
+        else if (ctx.L_BRACK_SYM() != null) 
         {
-            Type sizeType = visit(ctx.expression()); // [cite: 488]
-            if (!sizeType.isInteger()) // [cite: 488]
+            Type sizeType = visit(ctx.expression()); 
+            if (!sizeType.isInteger()) 
         {
-            logError(ctx.expression().start, "Array size must be an integer."); // [cite: 489]
+            logError(ctx.expression().start, "Array size must be an integer."); 
         }
             // The type of `new int[5]` is `int[]`.
-            type = new ArrayType(type); // [cite: 489]
+            type = new ArrayType(type); 
         }
 
 
-            note(ctx, type); // [cite: 490]
-            return type; // [cite: 490]
+            note(ctx, type); 
+            return type; 
         }
 
         if (ctx.ID() != null)
@@ -1519,98 +1519,98 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             Debug.logDebug("  -> Primary is an Identifier: " + ctx.ID().getText());
             // --- END NEW LOGGING ---
 
-            String name = ctx.ID().getText(); // [cite: 490]
+            String name = ctx.ID().getText(); 
 
-        if (name.equals("this")) // [cite: 490]
+        if (name.equals("this")) 
         {
             // ... (existing 'this' logic) ... [cite: 491-493]
-            if (currentMethod != null && currentMethod.isStatic()) // [cite: 491]
+            if (currentMethod != null && currentMethod.isStatic()) 
         {
-            logError(ctx.ID().getSymbol(), "'this' cannot be used in a static context."); // [cite: 491]
-            return ErrorType.INSTANCE; // [cite: 491]
+            logError(ctx.ID().getSymbol(), "'this' cannot be used in a static context."); 
+            return ErrorType.INSTANCE; 
         }
-            if (currentClass == null) // [cite: 492]
+            if (currentClass == null) 
         {
-            logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context."); // [cite: 492]
-            return ErrorType.INSTANCE; // [cite: 492]
+            logError(ctx.ID().getSymbol(), "'this' cannot be used outside of an instance context."); 
+            return ErrorType.INSTANCE; 
         }
-            Type thisType = currentClass.getType(); // [cite: 493]
-            note(ctx, thisType); // [cite: 493]
-            note(ctx, new VariableSymbol("this", thisType, false, false, true)); // [cite: 493]
-            return thisType; // [cite: 493]
+            Type thisType = currentClass.getType(); 
+            note(ctx, thisType); 
+            note(ctx, new VariableSymbol("this", thisType, false, false, true)); 
+            return thisType; 
         }
 
-            Optional<Symbol> symbolOpt = currentScope.resolve(name); // [cite: 493]
-        if (symbolOpt.isEmpty()) // [cite: 493]
+            Optional<Symbol> symbolOpt = currentScope.resolve(name); 
+        if (symbolOpt.isEmpty()) 
         {
             // --- START NEW LOGGING ---
             Debug.logDebug("    -> Symbol resolution FAILED for '" + name + "'");
             // --- END NEW LOGGING ---
-            logError(ctx.ID().getSymbol(), "Cannot find symbol '" + name + "'."); // [cite: 494]
-            note(ctx, ErrorType.INSTANCE); // [cite: 494]
-            return ErrorType.INSTANCE; // [cite: 494]
+            logError(ctx.ID().getSymbol(), "Cannot find symbol '" + name + "'."); 
+            note(ctx, ErrorType.INSTANCE); 
+            return ErrorType.INSTANCE; 
         }
 
-            Symbol symbol = symbolOpt.get(); // [cite: 494]
-        if (symbol instanceof AliasSymbol) // [cite: 494]
+            Symbol symbol = symbolOpt.get(); 
+        if (symbol instanceof AliasSymbol) 
         {
-            symbol = ((AliasSymbol) symbol).getTargetSymbol(); // [cite: 495]
+            symbol = ((AliasSymbol) symbol).getTargetSymbol(); 
         }
 
             // --- START NEW LOGGING ---
             Debug.logDebug("    -> Symbol resolution SUCCEEDED for '" + name + "': " + symbol);
             // --- END NEW LOGGING ---
 
-            note(ctx, symbol); // [cite: 495]
-            Type type = symbol.getType(); // [cite: 495]
-        if (type instanceof UnresolvedType) // [cite: 495]
+            note(ctx, symbol); 
+            Type type = symbol.getType(); 
+        if (type instanceof UnresolvedType) 
         {
-            type = resolveUnresolvedType((UnresolvedType) type, ctx.ID().getSymbol()); // [cite: 495]
+            type = resolveUnresolvedType((UnresolvedType) type, ctx.ID().getSymbol()); 
         }
 
             // --- START NEW LOGGING ---
             Debug.logDebug("    -> Final type for '" + name + "': " + (type != null ? type.getName() : "null"));
             // --- END NEW LOGGING ---
 
-            note(ctx, type); // [cite: 496]
-            return type; // [cite: 496]
+            note(ctx, type); 
+            return type; 
         }
         if (ctx.literal() != null)
         {
         // ... (existing literal logic) ... [cite: 496]
-            Type literalType = visit(ctx.literal()); // [cite: 496]
-            note(ctx, literalType); // [cite: 496]
-            return literalType; // [cite: 496]
+            Type literalType = visit(ctx.literal()); 
+            note(ctx, literalType); 
+            return literalType; 
         }
         if (ctx.expression() != null)
         {
         // ... (existing parenthesized expression logic) ... [cite: 497]
-            Type exprType = visit(ctx.expression()); // [cite: 497]
-            note(ctx, exprType); // [cite: 497]
-            return exprType; // [cite: 497]
+            Type exprType = visit(ctx.expression()); 
+            note(ctx, exprType); 
+            return exprType; 
         }
 
         // This handles the new primitiveType in primary rule
         if (ctx.primitiveType() != null)
         {
         // ... (existing primitive type logic) ... [cite: 497-499]
-            String baseTypeName = ctx.primitiveType().getText(); // [cite: 498]
+            String baseTypeName = ctx.primitiveType().getText(); 
 
             // Find the symbol for the primitive type in the global scope
-            Optional<Symbol> symbolOpt = globalScope.resolve(baseTypeName); // [cite: 498]
+            Optional<Symbol> symbolOpt = globalScope.resolve(baseTypeName); 
 
-        if (symbolOpt.isEmpty()) // [cite: 498]
+        if (symbolOpt.isEmpty()) 
         {
-            logError(ctx.primitiveType().start, "Undefined primitive type: '" + baseTypeName + "'."); // [cite: 499]
-            return ErrorType.INSTANCE; // [cite: 499]
+            logError(ctx.primitiveType().start, "Undefined primitive type: '" + baseTypeName + "'."); 
+            return ErrorType.INSTANCE; 
         }
 
-            Type primitive = symbolOpt.get().getType(); // [cite: 499]
-            note(ctx, primitive); // [cite: 499]
-            return primitive; // [cite: 499]
+            Type primitive = symbolOpt.get().getType(); 
+            note(ctx, primitive); 
+            return primitive; 
         }
 
-        return visitChildren(ctx); // [cite: 499]
+        return visitChildren(ctx); 
     }
 
     @Override
