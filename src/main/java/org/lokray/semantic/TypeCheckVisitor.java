@@ -877,7 +877,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
             noteInfo(ctx, info); 
 
             visit(ctx.block()); // Visit body [cite: 2558]
-            System.out.println("SOMETHING'S VERY WRONG");  This indicates an unexpected path, likely remove in final code.
+            System.out.println("SOMETHING'S VERY WRONG"); 
         }
 
         currentScope = currentScope.getEnclosingScope(); 

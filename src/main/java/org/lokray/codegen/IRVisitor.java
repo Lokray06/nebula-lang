@@ -379,7 +379,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			// ... (existing traditional for loop codegen remains the same) ... [cite: 3774-3783]
 			Debug.logDebug("Codegen: Traditional for loop (using Semantic Info): " + ctx.getText()); 
 			LLVMValueRef function = currentFunction; 
-			Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);  // Backup outer scope
+			Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues); 
 
 			// --- 1. Initializer --- [cite: 3775]
 			if (info.initializer() != null)
