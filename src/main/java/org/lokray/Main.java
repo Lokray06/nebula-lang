@@ -88,14 +88,14 @@ public class Main
 				return;
 			}
 
-			Debug.logInfo("Semantic analysis passed successfully!");
-			Debug.logInfo("Generating LLVM IR...");
+			Debug.logDebug("Semantic analysis passed successfully!");
+			Debug.logDebug("Generating LLVM IR...");
 
 			Path llvmIrPath = filePath.resolveSibling(filePath.getFileName().toString().replaceFirst("[.][^.]+$", ".ll"));
 			CodeGenerator codeGenerator = new CodeGenerator(tree, analyzer, llvmIrPath);
 			codeGenerator.generate();
 
-			Debug.logInfo("Compiling and linking...");
+			Debug.logDebug("Compiling and linking...");
 			compileAndLink(llvmIrPath, useNdk);
 
 		}
@@ -153,6 +153,7 @@ public class Main
 		ProcessBuilder link = new ProcessBuilder(linkCommand);
 		executeCommand(link);
 
-		Debug.logInfo("Compilation successful! Executable created at: " + executableFile);
+		Debug.logInfo("Compilation successful.");
+		Debug.logInfo("Executable created at: " + executableFile);
 	}
 }

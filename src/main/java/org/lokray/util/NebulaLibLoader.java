@@ -35,7 +35,7 @@ public class NebulaLibLoader
 			NamespaceSymbol nsSym = getOrCreateNamespace(fqn, globalScope);
 			loadNamespaceDTO(ns, nsSym, globalScope, declaredClasses);
 		}
-		Debug.logInfo("Loaded ndk symbols from " + libFile.getFileName());
+		Debug.logDebug("Loaded ndk symbols from " + libFile.getFileName());
 	}
 
 	private static void loadNamespaceDTO(NamespaceDTO dto, NamespaceSymbol parent, Scope globalScope, Map<String, ClassSymbol> declaredClasses)

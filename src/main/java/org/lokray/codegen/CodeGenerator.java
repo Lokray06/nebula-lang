@@ -39,7 +39,7 @@ public class CodeGenerator
 			}
 			else
 			{
-				Debug.logInfo("LLVM IR written to " + outputFilename);
+				Debug.logDebug("LLVM IR written to " + outputFilename);
 			}
 		}
 	}
