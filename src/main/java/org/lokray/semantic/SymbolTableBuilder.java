@@ -415,7 +415,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	    if (ms.getName().equals("main"))
 	    {
 		    ms.setIsMainMethod();
-		    Debug.logInfo("STB: Identified primary 'main' method:" + ms.getMangledName());
+		    Debug.logDebug("STB: Identified primary 'main' method:" + ms.getMangledName());
 	    }
 
         visitChildren(ctx);

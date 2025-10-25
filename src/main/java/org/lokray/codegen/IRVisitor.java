@@ -85,7 +85,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		// 3. Mark main method (no special behavior, just identification)
 		if (methodSymbol.isMainMethod())
 		{
-			Debug.logInfo("IR: Marking as main method: " + methodName);
+			Debug.logDebug("IR: Marking as main method: " + methodName);
 			// Optional: could store function reference externally if needed
 		}
 

@@ -229,7 +229,7 @@ public class SemanticAnalyzer
         int nodeHash = (node != null) ? node.hashCode() : 0;
         Interval nodeInterval = (node != null) ? node.getSourceInterval() : null;
         // Use WARNING level temporarily to make sure it stands out
-        Debug.logWarning("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
+        Debug.logDebug("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
                 " (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
         // --- END NEW LOGGING ---
 
@@ -278,14 +278,14 @@ public class SemanticAnalyzer
     {
         if (node == null)
         {
-            Debug.logInfo("getResolvedType() -> Node is null, returning Optional.empty()");
+            Debug.logDebug("getResolvedType() -> Node is null, returning Optional.empty()");
             return Optional.empty();
         }
 
         Type t = resolvedTypes.get(node);
         if (t != null)
         {
-            Debug.logInfo("getResolvedType() -> Resolved: " + t.getName() + ", returning Optional.of(" + t.getName() + ")");
+            Debug.logDebug("getResolvedType() -> Resolved: " + t.getName() + ", returning Optional.of(" + t.getName() + ")");
             return Optional.of(t);
         }
 

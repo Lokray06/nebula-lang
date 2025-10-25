@@ -1,36 +1,42 @@
 [
   {
-    "name": "org.lokray.ndk.dto.LibraryDTO",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allDeclaredMethods": true
+    "name": "org.bytedeco.llvm.LLVM.LLVMContextRef",
+    "unsafeAllocated": true
   },
   {
-    "name": "org.lokray.ndk.dto.NamespaceDTO",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allDeclaredMethods": true
+    "name": "org.bytedeco.llvm.LLVM.LLVMModuleRef",
+    "unsafeAllocated": true
   },
   {
-    "name": "org.lokray.ndk.dto.ClassDTO",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allDeclaredMethods": true
+    "name": "org.bytedeco.llvm.LLVM.LLVMBuilderRef",
+    "unsafeAllocated": true
   },
   {
-    "name": "org.lokray.ndk.dto.StructDTO",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allDeclaredMethods": true
+    "name": "org.bytedeco.llvm.LLVM.LLVMTypeRef",
+    "unsafeAllocated": true
   },
   {
-    "name": "org.lokray.ndk.dto.MethodDTO",
-    "allDeclaredConstructors": true,
-    "allDeclaredFields": true,
-    "allDeclaredMethods": true
+    "name": "org.bytedeco.llvm.LLVM.LLVMValueRef",
+    "unsafeAllocated": true
   },
   {
-    "name": "org.lokray.ndk.dto.FieldDTO",
+    "name": "org.bytedeco.llvm.LLVM.LLVMBasicBlockRef",
+    "unsafeAllocated": true
+  },
+  {
+    "name": "org.bytedeco.javacpp.Pointer",
+    "unsafeAllocated": true
+  },
+  {
+    "name": "org.bytedeco.javacpp.BytePointer",
+    "unsafeAllocated": true
+  },
+  {
+    "name": "org.bytedeco.javacpp.PointerPointer",
+    "unsafeAllocated": true
+  },
+  {
+    "name": "org.lokray.ndk.dto.**",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,
     "allDeclaredMethods": true

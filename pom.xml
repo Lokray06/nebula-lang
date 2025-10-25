@@ -16,6 +16,19 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>llvm</artifactId>
+            <version>20.1.7-1.5.12</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>llvm-platform</artifactId>
+            <version>20.1.7-1.5.12</version>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
             <groupId>org.antlr</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>4.13.1</version>
@@ -25,17 +38,32 @@
             <artifactId>gson</artifactId>
             <version>2.13.2</version>
         </dependency>
-        <dependency>
-            <groupId>org.bytedeco</groupId>
-            <artifactId>llvm</artifactId>
-            <version>20.1.7-1.5.12</version>
-        </dependency>
-        <dependency>
-            <groupId>org.bytedeco</groupId>
-            <artifactId>llvm-platform</artifactId>
-            <version>20.1.7-1.5.12</version>
-        </dependency>
     </dependencies>
+
+    <profiles>
+        <profile>
+            <id>linux-native-build</id>
+            <activation>
+                <property>
+                    <name>javacpp.platform</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>org.bytedeco</groupId>
+                    <artifactId>llvm</artifactId>
+                    <version>20.1.7-1.5.12</version>
+                    <classifier>${javacpp.platform}</classifier>
+                </dependency>
+                <dependency>
+                    <groupId>org.bytedeco</groupId>
+                    <artifactId>javacpp</artifactId>
+                    <version>1.5.12</version>
+                    <classifier>${javacpp.platform}</classifier>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
@@ -71,6 +99,10 @@
                 <configuration>
                     <mainClass>org.lokray.Main</mainClass>
                     <imageName>nebula</imageName>
+                    <buildArgs>
+                        <!-- Instruct GraalVM Native Image to load configurations from the 'graalvm-config' directory inside target/classes -->
+                        <buildArg>-H:ConfigurationResourceRoots=${project.build.outputDirectory}/META-INF/native-image/org/lokray</buildArg>
+                    </buildArgs>
                 </configuration>
             </plugin>
         </plugins>
