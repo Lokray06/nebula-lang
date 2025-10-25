@@ -908,9 +908,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			LLVMValueRef dataPtr = LLVMConstGEP2(LLVMTypeOf(stringData), globalData, new PointerPointer<>(indices), 2);
 
 			LLVMTypeRef stringType = TypeConverter.getStringStructTypeForContext(moduleContext);
-			LLVMValueRef[] fields = new LLVMValueRef[]{
-					dataPtr,
-					LLVMConstInt(LLVMInt32Type(), value.length(), 0)
+			LLVMValueRef[] fields = new LLVMValueRef[]{dataPtr, LLVMConstInt(LLVMInt32Type(), value.length(), 0)
 			};
 			LLVMValueRef structConst = LLVMConstNamedStruct(stringType, new PointerPointer<>(fields), fields.length);
 

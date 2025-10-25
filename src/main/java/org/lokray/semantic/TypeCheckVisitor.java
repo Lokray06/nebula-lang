@@ -1933,7 +1933,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitLiteral(NebulaParser.LiteralContext ctx)
 	{
-		// --- NEW Combined Integer Handling ---
+		// --- Combined Integer Handling ---
 		if (ctx.INTEGER_LITERAL() != null || ctx.HEX_LITERAL() != null || ctx.BIN_LITERAL() != null)
 		{
 			// Step 1: Analyze the literal's value, default type, and store them.
@@ -1983,33 +1983,106 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 			return finalType;
 		}
-		// --- END Combined Integer Handling ---
+
 		if (ctx.FLOAT_LITERAL() != null)
 		{
+			String text = ctx.FLOAT_LITERAL().getText().toLowerCase().replace("f", "");
+			try
+			{
+				float val = Float.parseFloat(text);
+				noteInfo(ctx, val); // Store the parsed value
+			}
+			catch (NumberFormatException e)
+			{
+				logError(ctx.start, "Invalid float literal: " + ctx.getText());
+				note(ctx, ErrorType.INSTANCE);
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.FLOAT); // Note the type
 			return PrimitiveType.FLOAT;
 		}
+
 		if (ctx.DOUBLE_LITERAL() != null)
 		{
+			try
+			{
+				double val = Double.parseDouble(ctx.DOUBLE_LITERAL().getText());
+				noteInfo(ctx, val); // Store the parsed value
+			}
+			catch (NumberFormatException e)
+			{
+				logError(ctx.start, "Invalid double literal: " + ctx.getText());
+				note(ctx, ErrorType.INSTANCE);
+				return ErrorType.INSTANCE;
+			}
+			note(ctx, PrimitiveType.DOUBLE); // Note the type
 			return PrimitiveType.DOUBLE;
 		}
+
 		if (ctx.BOOLEAN_LITERAL() != null)
 		{
+			boolean val = "true".equals(ctx.BOOLEAN_LITERAL().getText());
+			noteInfo(ctx, val); // Store the actual boolean value
+			note(ctx, PrimitiveType.BOOLEAN); // Store the type
 			return PrimitiveType.BOOLEAN;
 		}
+
 		if (ctx.CHAR_LITERAL() != null)
 		{
+			String text = ctx.CHAR_LITERAL().getText();
+			// Get the content inside the quotes, e.g., 'a' -> "a", '\n' -> "\n"
+			String inner = text.substring(1, text.length() - 1);
+			String unescaped = unescape(inner);
+
+			// A char literal must be exactly one character
+			if (unescaped.length() != 1)
+			{
+				logError(ctx.start, "Invalid char literal: " + text);
+				note(ctx, ErrorType.INSTANCE);
+				return ErrorType.INSTANCE;
+			}
+
+			char val = unescaped.charAt(0);
+			noteInfo(ctx, val); // Store the actual char value
+			note(ctx, PrimitiveType.CHAR); // Store the type
 			return PrimitiveType.CHAR;
 		}
+
 		if (ctx.STRING_LITERAL() != null)
 		{
-			return this.globalScope.resolve("string").get().getType();
+			String text = ctx.STRING_LITERAL().getText();
+			// Get content inside quotes, e.g., "hi\n" -> "hi\n"
+			String inner = text.substring(1, text.length() - 1);
+			String val = unescape(inner);
+
+			Type stringType = this.globalScope.resolve("string").get().getType();
+			noteInfo(ctx, val); // Store the actual unescaped String
+			note(ctx, stringType); // Store the type
+			return stringType;
 		}
+
 		if (ctx.interpolatedString() != null)
 		{
+			// This is fine, *AS LONG AS* your visitInterpolatedString method
+			// ALSO calls note() and noteInfo() for ctx.interpolatedString().
+			Type interpType = visitInterpolatedString(ctx.interpolatedString());
+
+			// If visitInterpolatedString doesn't do the noting, you must do it here.
+			// Assuming it returns the correct type (string) and stores info.
+			// A safer pattern might be:
+			// Type interpType = visit(ctx.interpolatedString()); // Use generic visit
+			// note(ctx, interpType); // Note this literal with the result
+			// noteInfo(ctx, resolvedInfo.get(ctx.interpolatedString())); // Pass info up
+			// return interpType;
+
+			// For now, let's assume your original code is correct:
 			return visitInterpolatedString(ctx.interpolatedString());
 		}
+
 		if (ctx.NULL_T() != null)
 		{
+			note(ctx, NullType.INSTANCE);
+			noteInfo(ctx, NullType.INSTANCE); // Store a placeholder for IRVisitor
 			return NullType.INSTANCE;
 		}
 
@@ -2270,24 +2343,24 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			Type paramType = params.get(i).getType();
 
 			// --- FIX ---
-			// Visit the argument expression *while telling it to expect the parameter type*.
-			// This propagates context into nested calls like getPi().
-			Type argType = visitExpecting(positionalArgs.get(i), paramType);
+			// Step 1: Get the argument's *default* type by visiting without an expectation.
+			Type argType = visit(positionalArgs.get(i));
 
 			if (!argType.isAssignableTo(paramType))
 			{
 				return Integer.MAX_VALUE;
 			}
 
-			// --- NEW COST LOGIC ---
+			// --- FIX ---
+			// Step 2: Calculate cost based on the *default* type.
 			int cost = 2; // 3. Boxing/Other match (default)
 			if (PrimitiveType.areEquivalent(argType, paramType))
 			{
-				cost = 0; // 1. Exact match (int -> int)
+				cost = 0; // 1. Exact match (e.g., default 'int' -> param 'int')
 			}
 			else if (paramType.isNumeric() && argType.isNumeric())
 			{
-				cost = 1; // 2. Widening match (int -> double)
+				cost = 1; // 2. Widening match (e.g., default 'int' -> param 'long' or 'double')
 			}
 
 			Debug.logDebug("      Positional Arg " + i + ": argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", cost=" + cost);
@@ -2301,15 +2374,16 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			Type paramType = paramOpt.get().getType();
 
 			// --- FIX ---
-			// Also use visitExpecting for named arguments.
-			Type argType = visitExpecting(entry.getValue(), paramType);
+			// Step 1: Get default type.
+			Type argType = visit(entry.getValue());
 
 			if (!argType.isAssignableTo(paramType))
 			{
 				return Integer.MAX_VALUE;
 			}
 
-			// --- NEW COST LOGIC ---
+			// --- FIX ---
+			// Step 2: Calculate cost.
 			int cost = 2; // 3. Boxing/Other match (default)
 			if (PrimitiveType.areEquivalent(argType, paramType))
 			{
@@ -2338,8 +2412,8 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			Type paramType = params.get(i).getType();
 
 			// --- FIX ---
-			// Visit the argument expression *while telling it to expect the parameter type*.
-			Type argType = visitExpecting(positionalArgs.get(i), paramType);
+			// Visit the argument expression *without* an expectation to get its actual, default type.
+			Type argType = visit(positionalArgs.get(i));
 			boolean assignable = argType.isAssignableTo(paramType);
 
 			Debug.logDebug("      Arg " + i + ": argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", assignable=" + assignable);
@@ -2363,8 +2437,8 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			Type paramType = p.getType();
 
 			// --- FIX ---
-			// Also use visitExpecting for named arguments.
-			Type argType = visitExpecting(e.getValue(), paramType);
+			// Also use plain visit() for named arguments.
+			Type argType = visit(e.getValue());
 			boolean assignable = argType.isAssignableTo(paramType);
 
 			Debug.logDebug("      Named Arg '" + e.getKey() + "': argType=" + argType.getName() + ", paramType=" + paramType.getName() + ", assignable=" + assignable);
@@ -2482,7 +2556,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		if (hasSignedByte)
 		{
 			determinedType = PrimitiveType.SBYTE;
-			if(!checkIntegerFits(bi, determinedType))
+			if (!checkIntegerFits(bi, determinedType))
 			{
 				// Range error
 				return;
@@ -2588,5 +2662,66 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	public Type getExpectedType()
 	{
 		return expectedType;
+	}
+
+	/**
+	 * Unescapes a string fragment that was inside quotes.
+	 * This handles basic Java-style escapes.
+	 */
+	private String unescape(String text)
+	{
+		if (text == null)
+		{
+			return null;
+		}
+		StringBuilder sb = new StringBuilder();
+		boolean inEscape = false;
+		for (char c : text.toCharArray())
+		{
+			if (inEscape)
+			{
+				switch (c)
+				{
+					case 'n':
+						sb.append('\n');
+						break;
+					case 't':
+						sb.append('\t');
+						break;
+					case 'r':
+						sb.append('\r');
+						break;
+					case 'b':
+						sb.append('\b');
+						break;
+					case 'f':
+						sb.append('\f');
+						break;
+					case '\\':
+						sb.append('\\');
+						break;
+					case '\'':
+						sb.append('\'');
+						break;
+					case '\"':
+						sb.append('\"');
+						break;
+					// TODO: Add \\uXXXX support here if your language supports it
+					default:
+						sb.append(c); // Invalid escape, just append char
+				}
+				inEscape = false;
+			}
+			else if (c == '\\')
+			{
+				inEscape = true;
+			}
+			else
+			{
+				sb.append(c);
+			}
+		}
+		// if (inEscape) { ... handle trailing backslash error ... }
+		return sb.toString();
 	}
 }

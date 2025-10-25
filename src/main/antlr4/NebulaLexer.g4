@@ -171,7 +171,7 @@ BIT_XOR_OP_COMP: '^=';
 BIT_L_SHIFT_COMP: '<<=';
 BIT_R_SHIFT_COMP: '>>=';
 
-// --- LITERALS ---
+// -------- LITERALS ---------
 // Make suffix optional and allow multiple chars (e.g., 'ul')
 fragment SUFFIX : [bBsSlLuU]+ ; // Changed ? to +
 
@@ -180,7 +180,7 @@ HEX_LITERAL
     ;
 
 BIN_LITERAL
-    : '-'? '0' [bB] [01_]+ SUFFIX?   // Suffix is optional
+    : '-'? '0' [bB] BIN_DIGITS SUFFIX?   // Use BIN_DIGITS instead of [01_]+
     ;
 
 // Combine INTEGER_LITERAL and LONG_LITERAL. Suffix determines final type semantically.
@@ -240,10 +240,23 @@ fragment ESCAPE_SEQUENCE
     |   '\\' 'u' HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
     ;
 
-fragment DECIMAL_DIGITS: [0-9] ([0-9_]* [0-9])? ;
-fragment HEX_DIGITS: HEX_DIGIT (HEX_DIGIT_UNDERSCORE* HEX_DIGIT)? ;
-fragment HEX_DIGIT_UNDERSCORE: [0-9a-fA-F_] ;
+// Defines a single hexadecimal digit
 fragment HEX_DIGIT: [0-9a-fA-F] ;
+
+// UPDATED -- Allows '1_000_000' but not '1__2' or '1_'
+fragment DECIMAL_DIGITS
+    :   [0-9] ( [0-9]+ | '_' [0-9]+ )* // <-- Note the '_'
+    ;
+
+// UPDATED -- Same logic for hex, e.g., '0xFF_FF'
+fragment HEX_DIGITS
+    :   HEX_DIGIT ( HEX_DIGIT+ | '_' HEX_DIGIT+ )* // <-- Note the '_'
+    ;
+
+// NEW -- Same logic for binary, e.g., '0b1010_0001'
+fragment BIN_DIGITS
+    :   [01] ( [01]+ | '_' [01]+ )* // <-- Note the '_'
+    ;
 
 // ---------------------- INTERPOLATION: TEXT MODE ----------------------
 mode INTERP;
