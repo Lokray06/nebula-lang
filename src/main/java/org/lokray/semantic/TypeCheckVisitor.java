@@ -237,7 +237,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		currentClass = (ClassSymbol) currentScope.resolveLocally(className).orElse(null);
 		if (currentClass == null)
 		{
-			Debug.logWarning("Class itself is apparently null??");
+			Debug.logDebug("Class itself is apparently null??");
 			return null;
 		}
 		currentScope = currentClass;

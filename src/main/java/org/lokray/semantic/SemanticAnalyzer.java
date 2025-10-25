@@ -240,7 +240,7 @@ public class SemanticAnalyzer
         if (s != null)
         {
             // --- START NEW LOGGING ---
-            Debug.logWarning("  -> Found symbol via direct lookup: " + s);
+            Debug.logDebug("  -> Found symbol via direct lookup: " + s);
             // --- END NEW LOGGING ---
             return Optional.of(s);
         }
@@ -250,7 +250,7 @@ public class SemanticAnalyzer
         if (target == null) { /*...*/ return Optional.empty(); }
 
         // --- START NEW LOGGING ---
-        Debug.logWarning("  -> Direct lookup failed, trying interval fallback...");
+        Debug.logDebug("  -> Direct lookup failed, trying interval fallback...");
         // --- END NEW LOGGING ---
         for (Map.Entry<ParseTree, Symbol> entry : resolvedSymbols.entrySet()) // Iterate entries
         {
@@ -263,13 +263,13 @@ public class SemanticAnalyzer
             if (kint != null && kint.equals(target))
             {
                 // --- START NEW LOGGING ---
-                Debug.logWarning("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
+                Debug.logDebug("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
                 // --- END NEW LOGGING ---
                 return Optional.ofNullable(entry.getValue());
             }
         }
         // --- START NEW LOGGING ---
-        Debug.logWarning("  -> Interval fallback FAILED.");
+        Debug.logDebug("  -> Interval fallback FAILED.");
         // --- END NEW LOGGING ---
         return Optional.empty();
     }

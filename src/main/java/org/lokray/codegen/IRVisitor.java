@@ -64,7 +64,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		{
 			methodName = methodSymbol.getMangledName();
 		}
-		Debug.logWarning("IR: Defining function: " + methodName);
+		Debug.logDebug("IR: Defining function: " + methodName);
 
 		// 2. Create or get the function prototype
 		LLVMValueRef function = LLVMGetNamedFunction(module, methodName);
@@ -488,7 +488,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 						{
 							conditionValue = LLVMBuildICmp(builder, LLVMIntNE, conditionValue, zero, "tobool_ptr");
 						}
-						Debug.logWarning("Codegen Warning: Condition in traditional for loop isn't bool/int. Using != zero/null comparison.");
+						Debug.logDebug("Codegen Warning: Condition in traditional for loop isn't bool/int. Using != zero/null comparison.");
 					}
 				}
 			}
@@ -1012,7 +1012,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 
 		// ----- Fallback (Should ideally not be reached often if semantics are correct) -----
-		Debug.logWarning("IRVisitor: Fallback literal handling for: " + ctx.getText());
+		Debug.logDebug("IRVisitor: Fallback literal handling for: " + ctx.getText());
 		if (ctx.INTEGER_LITERAL() != null)
 		{
 			return LLVMConstInt(LLVMInt32Type(), Long.parseLong(ctx.INTEGER_LITERAL().getText()), 0);
@@ -1129,7 +1129,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
 		{
 			// --- This is a method call used as an expression ---
-			Debug.logWarning("IR (Postfix): Resolved as method call: " + methodSymbol);
+			Debug.logDebug("IR (Postfix): Resolved as method call: " + methodSymbol);
 
 			String mangledName = methodSymbol.getMangledName();
 			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
@@ -1137,7 +1137,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			// 1. Create Function Prototype if it doesn't exist [cite: 1447]
 			if (function == null)
 			{
-				Debug.logWarning("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
+				Debug.logDebug("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
 				List<Type> paramTypes = methodSymbol.getParameterTypes();
 				LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
 				for (int i = 0; i < paramTypes.size(); i++)
@@ -1165,7 +1165,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 			if (argListCtx != null)
 			{
-				Debug.logWarning("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
+				Debug.logDebug("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
 				for (int i = 0; i < argListCtx.expression().size(); i++) // [cite: 1449]
 				{
 					NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
@@ -1211,7 +1211,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 
 			// 3. Build the call instruction [cite: 1458]
-			Debug.logWarning("IR (Postfix): Building LLVM call instruction for: " + mangledName);
+			Debug.logDebug("IR (Postfix): Building LLVM call instruction for: " + mangledName);
 			// This call *returns a value*, so we return the LLVMValueRef from the call. [cite: 1458]
 			return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), methodSymbol.getName() + ".call");
 		}
@@ -1334,7 +1334,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 		}
 
-		Debug.logWarning("IR: Using fallback LLVMBuildBitCast for cast: " + ctx.getText());
+		Debug.logDebug("IR: Using fallback LLVMBuildBitCast for cast: " + ctx.getText());
 		return LLVMBuildBitCast(builder, originalValue, targetLLVMType, "bitcast");
 	}
 
@@ -1387,7 +1387,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 						// --- MODIFIED ERROR --- [cite: 1480]
 						// The old parameter-finding logic was unreliable. [cite: 1481]
 						// If lookupVariable fails, the alloca is genuinely missing. [cite: 1481]
-						Debug.logWarning("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?"); // [cite: 1481]
+						Debug.logDebug("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?"); // [cite: 1481]
 						return null; // [cite: 1481]
 						// --- END MODIFIED ERROR --- [cite: 1481]
 					}
@@ -1401,13 +1401,13 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				{
 					// This is a method group (e.g., "getPi"). [cite: 1484]
 					// This is correct. The PostfixExpression visitor will handle the call. [cite: 1484]
-					Debug.logWarning("IR: primary ID '" + name + "' resolved to method group: " + sym); // [cite: 1484]
+					Debug.logDebug("IR: primary ID '" + name + "' resolved to method group: " + sym); // [cite: 1484]
 					return null;
 				}
 				else // [cite: 1485]
 				{
 					// Not a variable symbol (could be a type name, etc.) [cite: 1485]
-					Debug.logWarning("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym); // [cite: 1485]
+					Debug.logDebug("IR: primary ID '" + name + "' resolved to non-variable symbol: " + sym); // [cite: 1485]
 					return null;
 				}
 			}
@@ -2149,7 +2149,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 
 		// Fallback for other complex or unsupported cases
-		Debug.logWarning("IR: Attempted unsupported numeric cast from " + LLVMPrintTypeToString(sourceType) + " to " + LLVMPrintTypeToString(targetType));
+		Debug.logDebug("IR: Attempted unsupported numeric cast from " + LLVMPrintTypeToString(sourceType) + " to " + LLVMPrintTypeToString(targetType));
 		return sourceValue;
 	}
 }
