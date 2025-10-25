@@ -5,11 +5,13 @@ import org.lokray.semantic.symbol.ClassSymbol;
 import org.lokray.semantic.symbol.StructSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
-import org.lokray.util.Debug;
+
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 
 import static org.lokray.parser.NebulaLexer.*;
-
-import java.util.*;
 
 public class PrimitiveType implements Type
 {
@@ -349,5 +351,11 @@ public class PrimitiveType implements Type
 
 		// Otherwise, incompatible types
 		return ErrorType.INSTANCE;
+	}
+
+	@Override
+	public boolean isValidForMainReturnMain()
+	{
+		return this == PrimitiveType.VOID || this == PrimitiveType.INT32 || this == PrimitiveType.INT16 || this == PrimitiveType.INT8 || this == PrimitiveType.INT || this == PrimitiveType.SHORT || this == PrimitiveType.BYTE;
 	}
 }

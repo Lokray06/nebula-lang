@@ -8,6 +8,8 @@ import java.util.stream.Collectors; // NEW
 
 public class MethodSymbol extends Scope implements Symbol
 {
+	private boolean isMainMethod = false;
+
 	private final String name;
     private final String mangledName;
 	private Type returnType;
@@ -72,7 +74,17 @@ public class MethodSymbol extends Scope implements Symbol
         return this.getName();
     }
 
-    @Override
+	public void setIsMainMethod()
+	{
+		this.isMainMethod = true;
+	}
+
+	public boolean isMainMethod()
+	{
+		return isMainMethod;
+	}
+
+	@Override
 	public String getName()
 	{
 		return name;

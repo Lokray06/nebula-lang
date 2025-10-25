@@ -56,4 +56,9 @@ public interface Type extends Symbol
 	{
 		return null;
 	}
+
+	default boolean isValidForMainReturnMain()
+	{
+		return false;
+	}
 }

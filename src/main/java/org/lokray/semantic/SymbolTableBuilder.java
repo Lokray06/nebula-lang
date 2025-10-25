@@ -410,6 +410,14 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
         MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), returnType, params, currentScope, isStatic, isPublic, false, false);
         currentClass.defineMethod(ms);
 
+	    // ---  Check for Main Method ---
+	    // A method is considered 'main' if it's named 'main'.
+	    if (ms.getName().equals("main"))
+	    {
+		    ms.setIsMainMethod();
+		    Debug.logInfo("STB: Identified primary 'main' method:" + ms.getMangledName());
+	    }
+
         visitChildren(ctx);
 
         return null;
