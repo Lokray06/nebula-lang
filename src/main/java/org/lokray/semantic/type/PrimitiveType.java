@@ -6,10 +6,8 @@ import org.lokray.semantic.symbol.StructSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.math.BigInteger;
+import java.util.*;
 
 import static org.lokray.parser.NebulaLexer.*;
 
@@ -20,11 +18,11 @@ public class PrimitiveType implements Type
 	public static final PrimitiveType BOOLEAN = new PrimitiveType("bool");
 	public static final PrimitiveType CHAR = new PrimitiveType("char");
 
-	public static final PrimitiveType BYTE = new PrimitiveType("byte");
+	public static final PrimitiveType SBYTE = new PrimitiveType("sbyte");
 	public static final PrimitiveType SHORT = new PrimitiveType("short");
 	public static final PrimitiveType INT = new PrimitiveType("int");
 	public static final PrimitiveType LONG = new PrimitiveType("long");
-	public static final PrimitiveType UBYTE = new PrimitiveType("ubyte");
+	public static final PrimitiveType BYTE = new PrimitiveType("byte");
 	public static final PrimitiveType USHORT = new PrimitiveType("ushort");
 	public static final PrimitiveType UINT = new PrimitiveType("uint");
 	public static final PrimitiveType ULONG = new PrimitiveType("ulong");
@@ -40,6 +38,28 @@ public class PrimitiveType implements Type
 
 	public static final PrimitiveType FLOAT = new PrimitiveType("float");
 	public static final PrimitiveType DOUBLE = new PrimitiveType("double");
+
+
+	// --- NEW: BigInteger Range Constants ---
+	public static final BigInteger MIN_SBYTE = BigInteger.valueOf(Byte.MIN_VALUE);
+	public static final BigInteger MAX_SBYTE = BigInteger.valueOf(Byte.MAX_VALUE);
+	public static final BigInteger MIN_BYTE = BigInteger.ZERO;
+	public static final BigInteger MAX_BYTE = BigInteger.valueOf(255);
+
+	public static final BigInteger MIN_SHORT = BigInteger.valueOf(Short.MIN_VALUE);
+	public static final BigInteger MAX_SHORT = BigInteger.valueOf(Short.MAX_VALUE);
+	public static final BigInteger MIN_USHORT = BigInteger.ZERO;
+	public static final BigInteger MAX_USHORT = BigInteger.valueOf(65535);
+
+	public static final BigInteger MIN_INT = BigInteger.valueOf(Integer.MIN_VALUE);
+	public static final BigInteger MAX_INT = BigInteger.valueOf(Integer.MAX_VALUE);
+	public static final BigInteger MIN_UINT = BigInteger.ZERO;
+	public static final BigInteger MAX_UINT = new BigInteger("4294967295");
+
+	public static final BigInteger MIN_LONG = BigInteger.valueOf(Long.MIN_VALUE);
+	public static final BigInteger MAX_LONG = BigInteger.valueOf(Long.MAX_VALUE);
+	public static final BigInteger MIN_ULONG = BigInteger.ZERO;
+	public static final BigInteger MAX_ULONG = new BigInteger("18446744073709551615");
 
 	// --- The Single Source of Truth for all keywords ---
 	private static final Map<String, PrimitiveType> KEYWORD_TO_TYPE_MAP;
@@ -57,7 +77,7 @@ public class PrimitiveType implements Type
 		map.put("char", CHAR);
 
 		// Integers
-		map.put("byte", BYTE);
+		map.put("sbyte", SBYTE);
 		map.put("short", SHORT);
 		map.put("int", INT);
 		map.put("long", LONG);
@@ -65,7 +85,7 @@ public class PrimitiveType implements Type
 		map.put("int16", INT16);
 		map.put("int32", INT32);
 		map.put("int64", INT64);
-		map.put("ubyte", UBYTE);
+		map.put("byte", BYTE);
 		map.put("ushort", USHORT);
 		map.put("uint", UINT);
 		map.put("ulong", ULONG);
@@ -88,7 +108,7 @@ public class PrimitiveType implements Type
 		Set<PrimitiveType> charWidens = Set.of(INT, LONG, FLOAT, DOUBLE, INT32, INT64);
 		Set<PrimitiveType> floatWidens = Set.of(DOUBLE);
 
-		WIDENING_MAP.put(BYTE, byteWidens);
+		WIDENING_MAP.put(SBYTE, byteWidens);
 		WIDENING_MAP.put(INT8, byteWidens);
 
 		WIDENING_MAP.put(SHORT, shortWidens);
@@ -108,7 +128,7 @@ public class PrimitiveType implements Type
 		Set<PrimitiveType> uintWidens = Set.of(ULONG, UINT64, LONG, FLOAT, DOUBLE, INT64);
 		Set<PrimitiveType> ulongWidens = Set.of(FLOAT, DOUBLE);
 
-		WIDENING_MAP.put(UBYTE, ubyteWidens);
+		WIDENING_MAP.put(BYTE, ubyteWidens);
 		WIDENING_MAP.put(UINT8, ubyteWidens);
 
 		WIDENING_MAP.put(USHORT, ushortWidens);
@@ -212,11 +232,17 @@ public class PrimitiveType implements Type
 	@Override
 	public boolean isInteger()
 	{
-		return this.equals(BYTE) || this.equals(SHORT) || this.equals(INT) || this.equals(LONG) ||
-				this.equals(UBYTE) || this.equals(USHORT) || this.equals(UINT) || this.equals(ULONG) ||
+		return this.equals(SBYTE) || this.equals(SHORT) || this.equals(INT) || this.equals(LONG) ||
+				this.equals(BYTE) || this.equals(USHORT) || this.equals(UINT) || this.equals(ULONG) ||
 				this.equals(INT8) || this.equals(INT16) || this.equals(INT32) || this.equals(INT64) ||
 				this.equals(UINT8) || this.equals(UINT16) || this.equals(UINT32) || this.equals(UINT64) ||
 				this.equals(CHAR); // Chars can be treated as integers
+	}
+
+	public boolean isUnsigned()
+	{
+		return this == SBYTE || this == USHORT || this == UINT || this == ULONG ||
+				this == UINT8 || this == UINT16 || this == UINT32 || this == UINT64;
 	}
 
 	private void initializeStaticProperties()
@@ -250,14 +276,7 @@ public class PrimitiveType implements Type
 			return false;
 		}
 
-		// Prevent uint/ubyte from being "equivalent" to signed types
-		String nameA = typeA.getName();
-		String nameB = typeB.getName();
-
-		boolean aUnsigned = nameA.startsWith("u");
-		boolean bUnsigned = nameB.startsWith("u");
-
-		if (aUnsigned != bUnsigned)
+		if (typeA.isUnsigned() != typeB.isUnsigned())
 		{
 			// Different signedness — not equivalent
 			return false;
@@ -270,7 +289,7 @@ public class PrimitiveType implements Type
 	{
 		if (type.equals(INT8) || type.equals(BYTE_SPE_T))
 		{
-			return BYTE;
+			return SBYTE;
 		}
 		if (type.equals(INT16) || type.equals(SHORT_SPE_T))
 		{
@@ -286,7 +305,7 @@ public class PrimitiveType implements Type
 		}
 		if (type.equals(UINT8) || type.equals(U_BYTE_SPE_T))
 		{
-			return UBYTE;
+			return BYTE;
 		}
 		if (type.equals(UINT16) || type.equals(U_SHORT_SPE_T))
 		{
@@ -356,6 +375,50 @@ public class PrimitiveType implements Type
 	@Override
 	public boolean isValidForMainReturnMain()
 	{
-		return this == PrimitiveType.VOID || this == PrimitiveType.INT32 || this == PrimitiveType.INT16 || this == PrimitiveType.INT8 || this == PrimitiveType.INT || this == PrimitiveType.SHORT || this == PrimitiveType.BYTE;
+		// Valid main return types:
+		// - void
+		// - signed integers <= 32 bits
+		// - unsigned integers <= 16 bits
+		return  this == VOID ||                 // void
+				this == SBYTE || this == INT8 || // signed 8-bit
+				this == SHORT || this == INT16 || // signed 16-bit
+				this == INT || this == INT32 ||   // signed 32-bit
+				this == BYTE || this == UINT8 ||  // unsigned 8-bit
+				this == USHORT || this == UINT16; // unsigned 16-bit
+	}
+
+
+	// NEW Helper: Get BigInteger MIN value for this primitive type
+	public Optional<BigInteger> getMinValue()
+	{
+		return switch (this.name)
+		{
+			case "sbyte", "int8" -> Optional.of(MIN_SBYTE);
+			case "short", "int16" -> Optional.of(MIN_SHORT);
+			case "int", "int32" -> Optional.of(MIN_INT);
+			case "long", "int64" -> Optional.of(MIN_LONG);
+			case "byte", "uint8" -> Optional.of(MIN_BYTE);
+			case "ushort", "uint16" -> Optional.of(MIN_USHORT);
+			case "uint", "uint32" -> Optional.of(MIN_UINT);
+			case "ulong", "uint64" -> Optional.of(MIN_ULONG);
+			default -> Optional.empty(); // Not an integer type
+		};
+	}
+
+	// NEW Helper: Get BigInteger MAX value for this primitive type
+	public Optional<BigInteger> getMaxValue()
+	{
+		return switch (this.name)
+		{
+			case "sbyte", "int8" -> Optional.of(MAX_SBYTE);
+			case "short", "int16" -> Optional.of(MAX_SHORT);
+			case "int", "int32" -> Optional.of(MAX_INT);
+			case "long", "int64" -> Optional.of(MAX_LONG);
+			case "byte", "uint8" -> Optional.of(MAX_BYTE);
+			case "ushort", "uint16" -> Optional.of(MAX_USHORT);
+			case "uint", "uint32" -> Optional.of(MAX_UINT);
+			case "ulong", "uint64" -> Optional.of(MAX_ULONG);
+			default -> Optional.empty(); // Not an integer type
+		};
 	}
 }

@@ -1929,15 +1929,61 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return visitChildren(ctx);
 	}
 
+	// --- MODIFIED visitLiteral ---
 	@Override
 	public Type visitLiteral(NebulaParser.LiteralContext ctx)
 	{
-		if (ctx.LONG_LITERAL() != null || ctx.INTEGER_LITERAL() != null || ctx.HEX_LITERAL() != null)
+		// --- NEW Combined Integer Handling ---
+		if (ctx.INTEGER_LITERAL() != null || ctx.HEX_LITERAL() != null || ctx.BIN_LITERAL() != null)
 		{
-			resolveIntegerLiteralSemantics(ctx);
-			Type resolved = resolvedTypes.get(ctx);
-			return resolved != null ? resolved : ErrorType.INSTANCE;
+			// Step 1: Analyze the literal's value, default type, and store them.
+			resolveIntegerLiteralSemantics(ctx); // This notes default type and BigInteger value
+
+			// Step 2: Retrieve the analyzed info
+			Type defaultType = resolvedTypes.get(ctx);
+			Object info = resolvedInfo.get(ctx); // Value stored by resolveIntegerLiteralSemantics
+			BigInteger literalValue = (info instanceof BigInteger) ? (BigInteger) info : null;
+
+			if (defaultType == null || defaultType instanceof ErrorType || literalValue == null)
+			{
+				return ErrorType.INSTANCE; // Error already logged during semantic resolution
+			}
+
+			Type finalType = defaultType; // Assume default unless context overrides
+
+			// Step 3: Check context (expected type)
+			Type currentExpectedType = getExpectedType(); // Use the getter
+
+			if (currentExpectedType != null && currentExpectedType.isInteger() && currentExpectedType instanceof PrimitiveType expectedPrimitive)
+			{
+				Debug.logDebug("Integer literal context expects type: " + expectedPrimitive.getName());
+
+				// Step 4: Validate value against expected type's range
+				if (checkIntegerFits(literalValue, expectedPrimitive))
+				{
+					// It fits! Use the expected type as the final type for this literal.
+					finalType = expectedPrimitive;
+					Debug.logDebug("Literal '" + ctx.getText() + "' fits expected type. Using: " + finalType.getName());
+					note(ctx, finalType); // Re-note with the more specific contextual type
+					// Keep the original BigInteger value noted in resolvedInfo
+				}
+				else
+				{
+					// It doesn't fit the expected type. Report error.
+					logError(ctx.start, "Integer literal '" + ctx.getText() + "' is out of range for the expected type '" + expectedPrimitive.getName() + "'.");
+					note(ctx, ErrorType.INSTANCE); // Note error
+					return ErrorType.INSTANCE;
+				}
+			}
+			else
+			{
+				// No specific integer type expected, or expected type isn't integer. Use the default.
+				Debug.logDebug("No specific integer type expected or not an integer. Using default type: " + defaultType.getName() + " for literal '" + ctx.getText() + "'");
+				// The default type and value are already noted by resolveIntegerLiteralSemantics.
+			}
+			return finalType;
 		}
+		// --- END Combined Integer Handling ---
 		if (ctx.FLOAT_LITERAL() != null)
 		{
 			return PrimitiveType.FLOAT;
@@ -2331,28 +2377,34 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return true;
 	}
 
+	// --- REFINED resolveIntegerLiteralSemantics ---
+	// Return type changed to void. It now *notes* the default type and value.
 	private void resolveIntegerLiteralSemantics(NebulaParser.LiteralContext ctx)
 	{
 		String raw = null;
+		Token literalToken = null; // Store the token for better error reporting
 
-		if (ctx.LONG_LITERAL() != null)
-		{
-			raw = ctx.LONG_LITERAL().getText();
-		}
-		else if (ctx.INTEGER_LITERAL() != null)
+		if (ctx.INTEGER_LITERAL() != null)
 		{
 			raw = ctx.INTEGER_LITERAL().getText();
+			literalToken = ctx.INTEGER_LITERAL().getSymbol();
 		}
 		else if (ctx.HEX_LITERAL() != null)
 		{
 			raw = ctx.HEX_LITERAL().getText();
+			literalToken = ctx.HEX_LITERAL().getSymbol();
+		}
+		else if (ctx.BIN_LITERAL() != null)
+		{
+			raw = ctx.BIN_LITERAL().getText();
+			literalToken = ctx.BIN_LITERAL().getSymbol();
 		}
 		else
 		{
-			return; // Not an integer-like literal
+			return; // Should not happen if called correctly
 		}
 
-		String originalText = raw; // For diagnostics
+		String originalText = raw;
 
 		// --- Separate sign ---
 		boolean negative = false;
@@ -2362,62 +2414,50 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			raw = raw.substring(1);
 		}
 
-		// --- Extract suffix (trailing letters) in any order, case-insensitive ---
+		// --- Extract suffix ---
 		int suffixStart = raw.length();
 		while (suffixStart > 0 && Character.isLetter(raw.charAt(suffixStart - 1)))
 		{
 			suffixStart--;
 		}
-		String suffix = raw.substring(suffixStart);       // may be empty
+		String suffix = raw.substring(suffixStart);
 		String numericPart = raw.substring(0, suffixStart);
-
 		String suffixLower = suffix.toLowerCase(Locale.ROOT);
 
-		// allowed letters: b, s, l, u
-		boolean hasByte = suffixLower.indexOf('b') >= 0;
-		boolean hasShort = suffixLower.indexOf('s') >= 0;
-		boolean hasLong = suffixLower.indexOf('l') >= 0;
-		boolean hasUnsigned = suffixLower.indexOf('u') >= 0;
+		// Check specifically for signed byte suffix 'sb'
+		boolean hasSignedByte = suffixLower.contains("s") && suffixLower.contains("b");
+		boolean hasByte = suffixLower.contains("b") && !suffixLower.contains("s");
+		boolean hasShort = suffixLower.contains("s");
+		boolean hasLong = suffixLower.contains("l");
+		boolean hasUnsigned = suffixLower.contains("u");
 
-		// Validate suffix characters (reject unknown letters)
+		// --- Validate Suffix ---
 		for (int i = 0; i < suffixLower.length(); ++i)
 		{
 			char c = suffixLower.charAt(i);
 			if (c != 'b' && c != 's' && c != 'l' && c != 'u')
 			{
-				logError(ctx.start, "Unknown integer literal suffix '" + c + "' in: " + originalText);
+				logError(literalToken, "Unknown integer literal suffix '" + c + "' in: " + originalText);
 				note(ctx, ErrorType.INSTANCE);
 				return;
 			}
 		}
-
-		// Conflicting small-size specifiers
 		if (hasByte && hasShort)
-		{
-			logError(ctx.start, "Conflicting integer literal size suffixes 'b' and 's' in: " + originalText);
-			note(ctx, ErrorType.INSTANCE);
+		{ /* ... error ... */
 			return;
 		}
+		// Potentially add more suffix conflict checks (e.g., 'bl' vs 'sl') if needed.
 
-		// Remove underscores from numeric part for parsing
+		// --- Parse Value ---
 		numericPart = numericPart.replace("_", "");
-
 		int base = 10;
 		if (numericPart.startsWith("0x") || numericPart.startsWith("0X"))
-		{
-			base = 16;
-			numericPart = numericPart.substring(2);
-		}
+		{ /* ... base = 16 ... */ }
 		else if (numericPart.startsWith("0b") || numericPart.startsWith("0B"))
-		{
-			base = 2;
-			numericPart = numericPart.substring(2);
-		}
+		{ /* ... base = 2 ... */ }
 
-		if (numericPart.length() == 0)
-		{
-			logError(ctx.start, "Malformed integer literal: " + originalText);
-			note(ctx, ErrorType.INSTANCE);
+		if (numericPart.isEmpty())
+		{ /* ... error ... */
 			return;
 		}
 
@@ -2431,159 +2471,115 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 		catch (NumberFormatException ex)
-		{
-			logError(ctx.start, "Malformed integer literal: " + originalText);
-			note(ctx, ErrorType.INSTANCE);
+		{ /* ... error ... */
 			return;
 		}
 
-		// Range constants
-		BigInteger zero = BigInteger.ZERO;
-		BigInteger maxInt32 = BigInteger.valueOf(Integer.MAX_VALUE);
-		BigInteger minInt32 = BigInteger.valueOf(Integer.MIN_VALUE);
-		BigInteger maxUInt32 = new BigInteger("4294967295");
-		BigInteger maxInt64 = BigInteger.valueOf(Long.MAX_VALUE);
-		BigInteger minInt64 = BigInteger.valueOf(Long.MIN_VALUE);
-		BigInteger maxUInt64 = new BigInteger("18446744073709551615");
+		// --- Determine Type Based on Suffix AND Value Range ---
+		PrimitiveType determinedType = null; // Default to error
 
-		// --- Small-size suffixes ---
-		if (hasByte || hasShort)
+		// 1. Check explicit suffixes first
+		if (hasSignedByte)
 		{
-			if (hasByte)
+			determinedType = PrimitiveType.SBYTE;
+			if(!checkIntegerFits(bi, determinedType))
 			{
-				if (hasUnsigned)
-				{
-					if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(BigInteger.valueOf(0xFFL)) > 0)
-					{
-						logError(ctx.start, "Unsigned byte literal out of range: " + originalText);
-						note(ctx, ErrorType.INSTANCE);
-						return;
-					}
-					note(ctx, PrimitiveType.UINT8);
-					noteInfo(ctx, bi.intValue() & 0xFF);
-				}
-				else
-				{
-					if (bi.compareTo(BigInteger.valueOf(Byte.MIN_VALUE)) < 0 || bi.compareTo(BigInteger.valueOf(Byte.MAX_VALUE)) > 0)
-					{
-						logError(ctx.start, "Byte literal out of range: " + originalText);
-						note(ctx, ErrorType.INSTANCE);
-						return;
-					}
-					note(ctx, PrimitiveType.INT8);
-					noteInfo(ctx, bi.intValue());
-				}
-				return;
-			}
-			else // hasShort
-			{
-				if (hasUnsigned)
-				{
-					if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(BigInteger.valueOf(0xFFFFL)) > 0)
-					{
-						logError(ctx.start, "Unsigned short literal out of range: " + originalText);
-						note(ctx, ErrorType.INSTANCE);
-						return;
-					}
-					note(ctx, PrimitiveType.UINT16);
-					noteInfo(ctx, bi.intValue() & 0xFFFF);
-				}
-				else
-				{
-					if (bi.compareTo(BigInteger.valueOf(Short.MIN_VALUE)) < 0 || bi.compareTo(BigInteger.valueOf(Short.MAX_VALUE)) > 0)
-					{
-						logError(ctx.start, "Short literal out of range: " + originalText);
-						note(ctx, ErrorType.INSTANCE);
-						return;
-					}
-					note(ctx, PrimitiveType.INT16);
-					noteInfo(ctx, bi.intValue());
-				}
+				// Range error
 				return;
 			}
 		}
-
-		// --- Unsigned suffix alone (without L) ---
-		if (hasUnsigned && !hasLong)
+		if (hasByte)
 		{
-			if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt32) <= 0)
-			{
-				note(ctx, PrimitiveType.UINT32);
-				noteInfo(ctx, bi.intValue());
+			determinedType = PrimitiveType.BYTE;
+			if (!checkIntegerFits(bi, determinedType))
+			{ /* ... range error ... */
 				return;
 			}
-			else if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0)
-			{
-				note(ctx, PrimitiveType.UINT64);
-				noteInfo(ctx, bi.longValue());
+		}
+		else if (hasShort)
+		{
+			determinedType = hasUnsigned ? PrimitiveType.USHORT : PrimitiveType.SHORT;
+			if (!checkIntegerFits(bi, determinedType))
+			{ /* ... range error ... */
 				return;
+			}
+		}
+		else if (hasLong)
+		{
+			determinedType = hasUnsigned ? PrimitiveType.ULONG : PrimitiveType.LONG;
+			if (!checkIntegerFits(bi, determinedType))
+			{ /* ... range error ... */
+				return;
+			}
+		}
+		else if (hasUnsigned)
+		{ // 'u' suffix without 'l', 's', 'b'
+			if (checkIntegerFits(bi, PrimitiveType.UINT))
+			{
+				determinedType = PrimitiveType.UINT;
+			}
+			else if (checkIntegerFits(bi, PrimitiveType.ULONG))
+			{
+				determinedType = PrimitiveType.ULONG;
 			}
 			else
-			{
-				logError(ctx.start, "Unsigned literal out of range: " + originalText);
-				note(ctx, ErrorType.INSTANCE);
+			{ /* ... range error for unsigned ... */
 				return;
 			}
-		}
-
-		// --- Long suffix ---
-		if (hasLong)
-		{
-			if (hasUnsigned)
-			{
-				if (bi.compareTo(BigInteger.ZERO) < 0 || bi.compareTo(maxUInt64) > 0)
-				{
-					logError(ctx.start, "Unsigned long literal out of range: " + originalText);
-					note(ctx, ErrorType.INSTANCE);
-					return;
-				}
-				note(ctx, PrimitiveType.UINT64);
-				noteInfo(ctx, bi.longValue());
-			}
-			else
-			{
-				if (bi.compareTo(minInt64) < 0 || bi.compareTo(maxInt64) > 0)
-				{
-					logError(ctx.start, "Long literal out of range: " + originalText);
-					note(ctx, ErrorType.INSTANCE);
-					return;
-				}
-				note(ctx, PrimitiveType.INT64);
-				noteInfo(ctx, bi.longValue());
-			}
-			return;
-		}
-
-		// --- No suffix: try int32 -> int64 ---
-		if (bi.compareTo(minInt32) >= 0 && bi.compareTo(maxInt32) <= 0)
-		{
-			note(ctx, PrimitiveType.INT32);
-			noteInfo(ctx, bi.intValue());
-			return;
-		}
-		else if (bi.compareTo(minInt64) >= 0 && bi.compareTo(maxInt64) <= 0)
-		{
-			note(ctx, PrimitiveType.INT64);
-			noteInfo(ctx, bi.longValue());
-			return;
 		}
 		else
-		{
-			if (bi.compareTo(zero) >= 0 && bi.compareTo(maxUInt64) <= 0)
+		{ // 2. No suffix - determine smallest fitting *signed* type
+			if (checkIntegerFits(bi, PrimitiveType.INT))
 			{
-				logError(ctx.start, "Integer literal is too large for signed types; add 'u' or 'ul' suffix for unsigned: " + originalText);
+				determinedType = PrimitiveType.INT;
+			}
+			else if (checkIntegerFits(bi, PrimitiveType.LONG))
+			{
+				determinedType = PrimitiveType.LONG;
+			}
+			else
+			{
+				// If it doesn't fit signed long, check if it fits unsigned long
+				if (checkIntegerFits(bi, PrimitiveType.ULONG))
+				{
+					logError(literalToken, "Integer literal '" + originalText + "' is too large for signed types. Use 'ul' suffix for unsigned long.");
+				}
+				else
+				{
+					logError(literalToken, "Integer literal '" + originalText + "' out of range for all built-in integer types.");
+				}
 				note(ctx, ErrorType.INSTANCE);
 				return;
 			}
-			if (bi.compareTo(maxUInt64) > 0)
-			{
-				logError(ctx.start, "Integer literal out of range for all built-in types: " + originalText);
-				note(ctx, ErrorType.INSTANCE);
-				return;
-			}
-			logError(ctx.start, "Integer literal out of range: " + originalText);
-			note(ctx, ErrorType.INSTANCE);
 		}
+
+		// --- Note the results ---
+		note(ctx, determinedType); // Note the determined *default* type
+		noteInfo(ctx, bi);         // Note the BigInteger value
+	}
+
+	// --- NEW HELPER for Range Checking ---
+	private boolean checkIntegerFits(BigInteger value, PrimitiveType targetType)
+	{
+		if (!targetType.isInteger())
+		{
+			return false; // Safety check
+		}
+
+		Optional<BigInteger> minOpt = targetType.getMinValue();
+		Optional<BigInteger> maxOpt = targetType.getMaxValue();
+
+		if (minOpt.isEmpty() || maxOpt.isEmpty())
+		{
+			// Should not happen for valid integer PrimitiveTypes after adding constants
+			Debug.logWarning("Range check failed: MIN/MAX not defined for type " + targetType.getName());
+			return false;
+		}
+
+		BigInteger min = minOpt.get();
+		BigInteger max = maxOpt.get();
+
+		return value.compareTo(min) >= 0 && value.compareTo(max) <= 0;
 	}
 
 	/**

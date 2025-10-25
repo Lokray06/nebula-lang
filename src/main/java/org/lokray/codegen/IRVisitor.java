@@ -16,6 +16,7 @@ import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.util.Debug;
 
+import java.math.BigInteger;
 import java.util.*;
 
 import static org.bytedeco.llvm.global.LLVM.*;
@@ -55,7 +56,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 		String methodName;
 
-		if(methodSymbol.isMainMethod())
+		if (methodSymbol.isMainMethod())
 		{
 			methodName = methodSymbol.getName();
 		}
@@ -886,6 +887,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitLiteral(NebulaParser.LiteralContext ctx)
 	{
+		// ----- Get Final Semantic Info -----
+		Optional<Type> finalNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+		Optional<Object> valueInfoOpt = semanticAnalyzer.getResolvedInfo(ctx);
+
 		// ----- STRING LITERALS (unchanged) -----
 		if (ctx.STRING_LITERAL() != null)
 		{
@@ -916,101 +921,108 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			return globalString;
 		}
 
-		// ----- SEMANTIC CONSTANT HANDLING -----
-		Object semConst = null;
-		org.lokray.semantic.type.Type semType = null;
-		try
+		// ----- INTERPOLATED STRING (Needs implementation if not done) -----
+		if (ctx.interpolatedString() != null)
 		{
-			semConst = semanticAnalyzer.getResolvedInfo(ctx).orElse(null);
-			semType = semanticAnalyzer.getResolvedType(ctx).orElse(null);
-		}
-		catch (Exception ignored)
-		{
+			Debug.logWarning("IR generation for interpolated strings not fully implemented yet.");
+			// Placeholder: return an empty string for now
+			LLVMTypeRef stringStructType = TypeConverter.getStringStructTypeForContext(moduleContext);
+			LLVMValueRef emptyStr = LLVMConstNull(stringStructType); // Or create a proper empty string global
+			return LLVMBuildLoad2(builder, stringStructType, emptyStr, "interpolated_stub"); // Assuming global needs load
 		}
 
-		if (semConst != null && semType != null)
+
+		// ----- NULL -----
+		if (ctx.NULL_T() != null)
 		{
-			String t = semType.getName();
-			switch (t)
+			// Need to know the expected pointer type if possible, otherwise use i8*
+			// For now, let's assume i8* as a generic null pointer
+			LLVMTypeRef i8Ptr = LLVMPointerType(LLVMInt8TypeInContext(moduleContext), 0);
+			return LLVMConstNull(i8Ptr);
+		}
+
+		// ----- BOOLEAN -----
+		if (ctx.BOOLEAN_LITERAL() != null)
+		{
+			boolean val = ctx.BOOLEAN_LITERAL().getText().equals("true");
+			return LLVMConstInt(LLVMInt1TypeInContext(moduleContext), val ? 1 : 0, 0);
+		}
+
+		// ----- CHAR -----
+		if (ctx.CHAR_LITERAL() != null)
+		{
+			String text = ctx.CHAR_LITERAL().getText();
+			// Basic unescaping for simple cases - needs robust handling
+			char val = text.length() > 2 ? text.charAt(1) : 0; // Simplified
+			if (text.length() == 4 && text.startsWith("'\\"))
+			{ // e.g., '\n'
+				switch (text.charAt(2))
+				{
+					case 'n':
+						val = '\n';
+						break;
+					case 't':
+						val = '\t';
+						break;
+					case '\\':
+						val = '\\';
+						break;
+					case '\'':
+						val = '\'';
+						break;
+					// Add more escapes as needed
+				}
+			}
+			return LLVMConstInt(LLVMInt8TypeInContext(moduleContext), val, 0); // Assuming char is i8
+		}
+
+
+		// ----- NUMERIC LITERALS (Using Semantic Info) -----
+		if (finalNebulaTypeOpt.isPresent() && valueInfoOpt.isPresent())
+		{
+			Type finalNebulaType = finalNebulaTypeOpt.get();
+			Object valueInfo = valueInfoOpt.get();
+			LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(finalNebulaType, moduleContext);
+
+			// --- Floating Point ---
+			if (finalNebulaType == PrimitiveType.FLOAT && valueInfo instanceof Float)
 			{
-				case "int8":
-				case "uint8":
-				{
-					int v = ((Number) semConst).intValue();
-					return LLVMConstInt(LLVMInt8Type(), Integer.toUnsignedLong(v), 0);
-				}
-				case "int16":
-				case "uint16":
-				{
-					int v = ((Number) semConst).intValue();
-					return LLVMConstInt(LLVMInt16Type(), Integer.toUnsignedLong(v), 0);
-				}
-				case "int32":
-				case "uint32":
-				{
-					int v = ((Number) semConst).intValue();
-					return LLVMConstInt(LLVMInt32Type(), Integer.toUnsignedLong(v), 0);
-				}
-				case "int64":
-				case "uint64":
-				{
-					long v = ((Number) semConst).longValue();
-					return LLVMConstInt(LLVMInt64Type(), v, 0);
-				}
-				case "float":
-				{
-					float v = ((Number) semConst).floatValue();
-					return LLVMConstReal(LLVMFloatType(), v);
-				}
-				case "double":
-				{
-					double v = ((Number) semConst).doubleValue();
-					return LLVMConstReal(LLVMDoubleType(), v);
-				}
+				return LLVMConstReal(targetLLVMType, (Float) valueInfo);
+			}
+			if (finalNebulaType == PrimitiveType.DOUBLE && valueInfo instanceof Double)
+			{
+				return LLVMConstReal(targetLLVMType, (Double) valueInfo);
+			}
+			// Handle cases where literal was parsed as Double but target is Float
+			if (finalNebulaType == PrimitiveType.FLOAT && valueInfo instanceof Double)
+			{
+				return LLVMConstReal(targetLLVMType, ((Double) valueInfo).floatValue());
+			}
+
+
+			// --- Integer ---
+			if (finalNebulaType.isInteger() && valueInfo instanceof BigInteger biValue)
+			{
+				// Use the BigInteger value and the final LLVM type determined by semantics
+				long longVal = biValue.longValue(); // Get long value (potential truncation ok due to prior semantic checks)
+
+				// LLVMConstInt takes a 'long' for the value.
+				// For unsigned types, the bit pattern matters. We rely on the long having the correct bit pattern.
+				// LLVM treats integer types primarily by bit width, signedness is mainly for specific instructions (sdiv, udiv, etc.)
+				return LLVMConstInt(targetLLVMType, longVal, 0); // Use 0 for signed extension flag for simplicity, LLVM handles it
 			}
 		}
 
-		// ----- FALLBACK PARSING -----
+		// ----- Fallback (Should ideally not be reached often if semantics are correct) -----
+		Debug.logWarning("IRVisitor: Fallback literal handling for: " + ctx.getText());
 		if (ctx.INTEGER_LITERAL() != null)
 		{
-			return LLVMConstInt(LLVMInt32Type(),
-					Integer.toUnsignedLong(Integer.parseInt(ctx.INTEGER_LITERAL().getText())), 0);
+			return LLVMConstInt(LLVMInt32Type(), Long.parseLong(ctx.INTEGER_LITERAL().getText()), 0);
 		}
+		// ... other fallbacks. Shoudn't need implementation ...
 
-		if (ctx.LONG_LITERAL() != null)
-		{
-			return LLVMConstInt(LLVMInt64Type(),
-					Long.parseLong(ctx.LONG_LITERAL().getText().replaceAll("[lL]$", "")), 0);
-		}
-
-		if (ctx.HEX_LITERAL() != null)
-		{
-			return LLVMConstInt(LLVMInt32Type(),
-					Long.parseLong(ctx.HEX_LITERAL().getText().replaceFirst("0x", ""), 16), 0);
-		}
-
-		if (ctx.FLOAT_LITERAL() != null)
-		{
-			return LLVMConstReal(LLVMFloatType(),
-					Float.parseFloat(ctx.FLOAT_LITERAL().getText().replace("f", "")));
-		}
-
-		if (ctx.DOUBLE_LITERAL() != null)
-		{
-			return LLVMConstReal(LLVMDoubleType(), Double.parseDouble(ctx.DOUBLE_LITERAL().getText()));
-		}
-
-		if (ctx.BOOLEAN_LITERAL() != null)
-		{
-			return LLVMConstInt(LLVMInt1Type(), ctx.BOOLEAN_LITERAL().getText().equals("true") ? 1 : 0, 0);
-		}
-
-		if (ctx.CHAR_LITERAL() != null)
-		{
-			return LLVMConstInt(LLVMInt8Type(), 0, 0);
-		}
-
-		return super.visitLiteral(ctx);
+		Debug.logError("IR Error: Unhandled literal type in visitLiteral: " + ctx.getText());
+		return null; // Error case
 	}
 
 

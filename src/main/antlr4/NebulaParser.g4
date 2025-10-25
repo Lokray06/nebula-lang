@@ -451,9 +451,9 @@ arrayElement
 
 // ---------------------- Literals ----------------------
 literal
-    :   INTEGER_LITERAL
-    |   LONG_LITERAL
-    |   HEX_LITERAL
+    :   HEX_LITERAL
+    |   BIN_LITERAL
+    |   INTEGER_LITERAL
     |   FLOAT_LITERAL
     |   DOUBLE_LITERAL
     |   BOOLEAN_LITERAL

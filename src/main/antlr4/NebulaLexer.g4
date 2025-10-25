@@ -64,7 +64,7 @@ DEFAULT_KW: 'default';
 VOID_T: 'void';
 NULL_T: 'null';
 
-BYTE_T: 'byte';
+BYTE_T: 'sbyte';
 SHORT_T: 'short';
 INT_T: 'int';
 LONG_T: 'long';
@@ -74,7 +74,7 @@ SHORT_SPE_T: 'int16';
 INT_SPE_T: 'int32';
 LONG_SPE_T: 'int64';
 
-U_BYTE_T: 'ubyte';
+U_BYTE_T: 'byte';
 U_SHORT_T: 'ushort';
 U_INT_T: 'uint';
 U_LONG_T: 'ulong';
@@ -171,30 +171,28 @@ BIT_XOR_OP_COMP: '^=';
 BIT_L_SHIFT_COMP: '<<=';
 BIT_R_SHIFT_COMP: '>>=';
 
-// ---------------------- LITERALS ----------------------
-fragment SUFFIX
-    : [bBsSlLuU]? [bBsSlLuU]?
-    ;
+// --- LITERALS ---
+// Make suffix optional and allow multiple chars (e.g., 'ul')
+fragment SUFFIX : [bBsSlLuU]+ ; // Changed ? to +
 
 HEX_LITERAL
-    : '-'? '0' [xX] HEX_DIGITS SUFFIX
+    : '-'? '0' [xX] HEX_DIGITS SUFFIX? // Suffix is optional
     ;
 
 BIN_LITERAL
-    : '-'? '0' [bB] [01_]+ SUFFIX
+    : '-'? '0' [bB] [01_]+ SUFFIX?   // Suffix is optional
     ;
 
-LONG_LITERAL
-    : '-'? DECIMAL_DIGITS SUFFIX
-    ;
-
+// Combine INTEGER_LITERAL and LONG_LITERAL. Suffix determines final type semantically.
 INTEGER_LITERAL
-    : '-'? DECIMAL_DIGITS SUFFIX
+    : '-'? DECIMAL_DIGITS SUFFIX? // Suffix is optional
     ;
+
+// REMOVE the old LONG_LITERAL rule if it's fully covered now.
 
 fragment EXPONENT: [eE] [+-]? DECIMAL_DIGITS;
 
-FLOAT_LITERAL
+FLOAT_LITERAL // Keep as is
     :   '-'? (
             DECIMAL_DIGITS '.' DECIMAL_DIGITS? EXPONENT?
         |   '.' DECIMAL_DIGITS EXPONENT?
@@ -202,7 +200,7 @@ FLOAT_LITERAL
         ) [fF]
     ;
 
-DOUBLE_LITERAL
+DOUBLE_LITERAL // Keep as is
     :   '-'? (
             DECIMAL_DIGITS? '.' DECIMAL_DIGITS EXPONENT?
         |   '.' DECIMAL_DIGITS EXPONENT?

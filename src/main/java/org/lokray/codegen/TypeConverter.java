@@ -59,7 +59,7 @@ public class TypeConverter
             return LLVMInt8TypeInContext(ctx);
         }
 
-        if (type == PrimitiveType.BYTE || type == PrimitiveType.INT8 || type == PrimitiveType.UBYTE || type == PrimitiveType.UINT8) // Added UBYTE, UINT8
+        if (type == PrimitiveType.SBYTE || type == PrimitiveType.INT8 || type == PrimitiveType.BYTE || type == PrimitiveType.UINT8) // Added UBYTE, UINT8
         {
             return LLVMInt8TypeInContext(ctx);
         }
