@@ -16,327 +16,354 @@ import java.util.*;
 
 public class SemanticAnalyzer
 {
-    private final Scope globalScope = new Scope(null);
-    private boolean hasErrors = false;
-    private final Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
-    private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
-    private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
-    private final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
-    private final ErrorHandler errorHandler;
+	private final Scope globalScope = new Scope(null);
+	private boolean hasErrors = false;
+	private final Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
+	private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
+	private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
+	private final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
+	private final ErrorHandler errorHandler;
 
-    public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
-    {
-        this.errorHandler = errorHandler;
-        // Define all primitive types first
-        BuiltInTypeLoader.definePrimitives(globalScope);
+	public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
+	{
+		this.errorHandler = errorHandler;
+		// Define all primitive types first
+		BuiltInTypeLoader.definePrimitives(globalScope);
 
-        // Preload NDK library symbols into the global scope and declaredClasses map
-        if (ndkLib != null && Files.exists(ndkLib))
-        {
-            try
-            {
-                NebulaLibLoader.loadLibrary(ndkLib, globalScope, declaredClasses);
-                // After loading, ensure all NDK types are properly linked
-                linkNdkSymbols();
-                linkIntrinsicsToNdkStructs();
+		// Preload NDK library symbols into the global scope and declaredClasses map
+		if (ndkLib != null && Files.exists(ndkLib))
+		{
+			try
+			{
+				NebulaLibLoader.loadLibrary(ndkLib, globalScope, declaredClasses);
+				// After loading, ensure all NDK types are properly linked
+				linkNdkSymbols();
+				linkIntrinsicsToNdkStructs();
 
-                // After NDK load, create a global alias for 'string' -> 'nebula.core.String'
-                if (declaredClasses.containsKey("nebula.core.String"))
-                {
-                    Symbol stringSymbol = declaredClasses.get("nebula.core.String");
-                    globalScope.define(new AliasSymbol("string", stringSymbol));
-                }
+				// Automatically import all classes from 'nebula.core.*' into the global scope.
+				for (Map.Entry<String, ClassSymbol> entry : declaredClasses.entrySet())
+				{
+					String fqn = entry.getKey();
+					if (fqn.startsWith("nebula.core."))
+					{
+						// FIX: Use the last dot to find the simple class name,
+						// which correctly handles classes in sub-packages (e.g., nebula.core.io.Console -> Console).
+						int lastDotIndex = fqn.lastIndexOf('.');
+						// The simple name is the substring after the last dot.
+						String simpleName = fqn.substring(lastDotIndex + 1);
 
-            }
-            catch (Exception e)
-            {
-                Debug.logWarning("Failed to load ndk library: " + e.getMessage());
-                e.printStackTrace(); // Uncomment for debugging
-            }
-        }
-    }
+						// Skip string (assuming you only want the lowercase 'string' alias later)
+						//if(simpleName.equalsIgnoreCase("string")) continue;
 
-    public SemanticAnalyzer(ErrorHandler errorHandler)
-    {
-        this(null, errorHandler);
-    }
+						// 2. Define an AliasSymbol in the global scope for the simple name pointing to the ClassSymbol.
+						ClassSymbol classSymbol = entry.getValue();
+						globalScope.define(new AliasSymbol(simpleName, classSymbol));
+					}
+				}
 
-    public boolean analyze(ParseTree tree)
-    {
-        // Pass 1 & 2: Discover all types, handle imports/aliases, and define all members.
-        Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
-        SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
+				// Handle the special lowercase 'string' alias separately as intended
+				if (declaredClasses.containsKey("nebula.core.String"))
+				{
+					Symbol stringSymbol = declaredClasses.get("nebula.core.String");
+					globalScope.define(new AliasSymbol("string", stringSymbol));
+				}
 
-        // Debugging
-        Debug.logDebug("  Resolved types:");
-        for (ClassSymbol type : declaredClasses.values())
-        {
-            Debug.logDebug("    -" + type.getName());
-            // Print here all the methods defined in the class
-            // Iterate over the lists of overloads (Map values)
-            for (List<MethodSymbol> overloads : type.getMethodsByName().values())
-            {
-                for (MethodSymbol method : overloads)
-                {
+			}
+			catch (Exception e)
+			{
+				Debug.logWarning("Failed to load ndk library: " + e.getMessage());
+				e.printStackTrace(); // Uncomment for debugging
+			}
+		}
+	}
 
-                    Debug.logDebug("        - Method: " + method);
-                }
-            }
-        }
-        defVisitor.visit(tree);
+	public SemanticAnalyzer(ErrorHandler errorHandler)
+	{
+		this(null, errorHandler);
+	}
 
-        this.hasErrors = defVisitor.hasErrors();
-        if (hasErrors)
-        {
-            return false;
-        }
+	public boolean analyze(ParseTree tree)
+	{
+		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members.
+		Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
+		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
 
-        // Pass 3: Type Checking and Resolution for method bodies and initializers
-        Debug.logDebug("\nType checking...");
-        TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, resolvedInfo, errorHandler); // Pass resolvedInfo map
-        refVisitor.visit(tree);
-        this.hasErrors = refVisitor.hasErrors();
+		// Debugging
+		Debug.logDebug("  Resolved types:");
+		for (ClassSymbol type : declaredClasses.values())
+		{
+			Debug.logDebug("    -" + type.getName());
+			// Print here all the methods defined in the class
+			// Iterate over the lists of overloads (Map values)
+			for (List<MethodSymbol> overloads : type.getMethodsByName().values())
+			{
+				for (MethodSymbol method : overloads)
+				{
 
-        return !hasErrors;
-    }
+					Debug.logDebug("        - Method: " + method);
+				}
+			}
+		}
+		defVisitor.visit(tree);
 
-    private void linkNdkSymbols()
-    {
-        for (ClassSymbol cs : declaredClasses.values())
-        {
-            if (!cs.isNative())
-            {
-                continue;
-            }
+		this.hasErrors = defVisitor.hasErrors();
+		if (hasErrors)
+		{
+			return false;
+		}
 
-            // Link Field Types (This part is already correct as VariableSymbol hasn't changed its core Type logic)
-            cs.getSymbols().values().stream()
-                    .filter(sym -> sym instanceof VariableSymbol)
-                    .map(sym -> (VariableSymbol) sym)
-                    .forEach(vs ->
-                    {
-                        if (vs.getType() instanceof UnresolvedType)
-                        {
-                            vs.setType(resolveTypeByName(vs.getType().getName()));
-                        }
-                    });
+		// Pass 3: Type Checking and Resolution for method bodies and initializers
+		Debug.logDebug("\nType checking...");
+		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, resolvedInfo, errorHandler); // Pass resolvedInfo map
+		refVisitor.visit(tree);
+		this.hasErrors = refVisitor.hasErrors();
 
-            // Link Method Return and Parameter Types
-            for (List<MethodSymbol> overloads : cs.getMethodsByName().values())
-            {
-                for (MethodSymbol ms : overloads)
-                {
-                    // 1. Link return type (This is correct)
-                    if (ms.getType() instanceof UnresolvedType)
-                    {
-                        ms.setReturnType(resolveTypeByName(ms.getType().getName()));
-                    }
+		return !hasErrors;
+	}
 
-                    // 2. Link parameter types (NEW LOGIC)
-                    // Iterate through the ParameterSymbol list and update the Type object within each symbol.
-                    for (ParameterSymbol ps : ms.getParameters())
-                    {
-                        if (ps.getType() instanceof UnresolvedType)
-                        {
-                            // ParameterSymbol inherits setType from VariableSymbol,
-                            // which is used to update the Type.
-                            ps.setType(resolveTypeByName(ps.getType().getName()));
-                        }
-                    }
-                }
-            }
-        }
-    }
+	private void linkNdkSymbols()
+	{
+		for (ClassSymbol cs : declaredClasses.values())
+		{
+			if (!cs.isNative())
+			{
+				continue;
+			}
 
-    private Type resolveTypeByName(String name)
-    {
-        Optional<Symbol> primitive = globalScope.resolveLocally(name);
-        if (primitive.isPresent() && primitive.get().getType() instanceof PrimitiveType)
-        {
-            return primitive.get().getType();
-        }
-        if (declaredClasses.containsKey(name))
-        {
-            return declaredClasses.get(name).getType();
-        }
-        for (String fqn : declaredClasses.keySet())
-        {
-            if (fqn.endsWith("." + name))
-            {
-                return declaredClasses.get(fqn).getType();
-            }
-        }
-        return new UnresolvedType(name);
-    }
+			// Link Field Types (This part is already correct as VariableSymbol hasn't changed its core Type logic)
+			cs.getSymbols().values().stream()
+					.filter(sym -> sym instanceof VariableSymbol)
+					.map(sym -> (VariableSymbol) sym)
+					.forEach(vs ->
+					{
+						if (vs.getType() instanceof UnresolvedType)
+						{
+							vs.setType(resolveTypeByName(vs.getType().getName()));
+						}
+					});
 
-    private void linkIntrinsicsToNdkStructs()
-    {
-        Debug.logDebug("Linking intrinsic types to NDK structs...");
+			// Link Method Return and Parameter Types
+			for (List<MethodSymbol> overloads : cs.getMethodsByName().values())
+			{
+				for (MethodSymbol ms : overloads)
+				{
+					// 1. Link return type (This is correct)
+					if (ms.getType() instanceof UnresolvedType)
+					{
+						ms.setReturnType(resolveTypeByName(ms.getType().getName()));
+					}
 
-        // Map compiler-known names to the canonical NDK struct name.
-        Map<String, String> intrinsicToCanonical = Map.ofEntries(
-                Map.entry("bool", "Bool"),
-                Map.entry("char", "Char"),
+					// 2. Link parameter types (NEW LOGIC)
+					// Iterate through the ParameterSymbol list and update the Type object within each symbol.
+					for (ParameterSymbol ps : ms.getParameters())
+					{
+						if (ps.getType() instanceof UnresolvedType)
+						{
+							// ParameterSymbol inherits setType from VariableSymbol,
+							// which is used to update the Type.
+							ps.setType(resolveTypeByName(ps.getType().getName()));
+						}
+					}
+				}
+			}
+		}
+	}
 
-                // Integers
-                Map.entry("byte", "Int8"),
-                Map.entry("short", "Int16"),
-                Map.entry("int", "Int32"),
-                Map.entry("long", "Int64"),
-                Map.entry("int8", "Int8"),
-                Map.entry("int16", "Int16"),
-                Map.entry("int32", "Int32"),
-                Map.entry("int64", "Int64"),
+	private Type resolveTypeByName(String name)
+	{
+		Optional<Symbol> primitive = globalScope.resolveLocally(name);
+		if (primitive.isPresent() && primitive.get().getType() instanceof PrimitiveType)
+		{
+			return primitive.get().getType();
+		}
+		if (declaredClasses.containsKey(name))
+		{
+			return declaredClasses.get(name).getType();
+		}
+		for (String fqn : declaredClasses.keySet())
+		{
+			if (fqn.endsWith("." + name))
+			{
+				return declaredClasses.get(fqn).getType();
+			}
+		}
+		return new UnresolvedType(name);
+	}
 
-                //Unsigned integers
-                Map.entry("ubyte", "UInt8"),
-                Map.entry("ushort", "UInt16"),
-                Map.entry("uint", "UInt32"),
-                Map.entry("ulong", "UInt64"),
-                Map.entry("uint8", "UInt8"),
-                Map.entry("uint16", "UInt16"),
-                Map.entry("uint32", "UInt32"),
-                Map.entry("uint64", "UInt64"),
+	private void linkIntrinsicsToNdkStructs()
+	{
+		Debug.logDebug("Linking intrinsic types to NDK structs...");
 
-                Map.entry("float", "Float"),
-                Map.entry("double", "Double")
+		// Map compiler-known names to the canonical NDK struct name.
+		Map<String, String> intrinsicToCanonical = Map.ofEntries(
+				Map.entry("bool", "Bool"),
+				Map.entry("char", "Char"),
 
-        );
+				// Integers
+				Map.entry("byte", "Int8"),
+				Map.entry("short", "Int16"),
+				Map.entry("int", "Int32"),
+				Map.entry("long", "Int64"),
+				Map.entry("int8", "Int8"),
+				Map.entry("int16", "Int16"),
+				Map.entry("int32", "Int32"),
+				Map.entry("int64", "Int64"),
 
-        for (PrimitiveType pType : BuiltInTypeLoader.getAllPrimitives())
-        {
-            String canonicalName = intrinsicToCanonical.get(pType.getName());
-            if (canonicalName == null)
-            {
-                continue; // Skip types like 'void'
-            }
+				//Unsigned integers
+				Map.entry("ubyte", "UInt8"),
+				Map.entry("ushort", "UInt16"),
+				Map.entry("uint", "UInt32"),
+				Map.entry("ulong", "UInt64"),
+				Map.entry("uint8", "UInt8"),
+				Map.entry("uint16", "UInt16"),
+				Map.entry("uint32", "UInt32"),
+				Map.entry("uint64", "UInt64"),
 
-            String fqn = "nebula.core." + canonicalName;
+				Map.entry("float", "Float"),
+				Map.entry("double", "Double")
 
-            Symbol symbol = declaredClasses.get(fqn);
-            if (symbol instanceof StructSymbol)
-            {
-                pType.setBackingStruct((StructSymbol) symbol);
-                //Debug.logDebug("  Linked " + pType.getName() + " -> " + fqn);
-            }
-        }
-    }
+		);
 
-    public Optional<Symbol> getResolvedSymbol(ParseTree node)
-    {
-        // --- START NEW LOGGING ---
-        String nodeText = (node != null) ? node.getText() : "null";
-        int nodeHash = (node != null) ? node.hashCode() : 0;
-        Interval nodeInterval = (node != null) ? node.getSourceInterval() : null;
-        // Use WARNING level temporarily to make sure it stands out
-        Debug.logDebug("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
-                " (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
-        // --- END NEW LOGGING ---
+		for (PrimitiveType pType : BuiltInTypeLoader.getAllPrimitives())
+		{
+			String canonicalName = intrinsicToCanonical.get(pType.getName());
+			if (canonicalName == null)
+			{
+				continue; // Skip types like 'void'
+			}
 
-        if (node == null) { /*...*/ return Optional.empty(); }
+			String fqn = "nebula.core." + canonicalName;
 
-        // fast path: direct object-equality lookup
-        Symbol s = resolvedSymbols.get(node);
-        if (s != null)
-        {
-            // --- START NEW LOGGING ---
-            Debug.logDebug("  -> Found symbol via direct lookup: " + s);
-            // --- END NEW LOGGING ---
-            return Optional.of(s);
-        }
+			Symbol symbol = declaredClasses.get(fqn);
+			if (symbol instanceof StructSymbol)
+			{
+				pType.setBackingStruct((StructSymbol) symbol);
+				//Debug.logDebug("  Linked " + pType.getName() + " -> " + fqn);
+			}
+		}
+	}
 
-        // fallback: match by source interval
-        Interval target = node.getSourceInterval();
-        if (target == null) { /*...*/ return Optional.empty(); }
+	public Optional<Symbol> getResolvedSymbol(ParseTree node)
+	{
+		// --- START NEW LOGGING ---
+		String nodeText = (node != null) ? node.getText() : "null";
+		int nodeHash = (node != null) ? node.hashCode() : 0;
+		Interval nodeInterval = (node != null) ? node.getSourceInterval() : null;
+		// Use WARNING level temporarily to make sure it stands out
+		Debug.logDebug("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
+				" (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
+		// --- END NEW LOGGING ---
 
-        // --- START NEW LOGGING ---
-        Debug.logDebug("  -> Direct lookup failed, trying interval fallback...");
-        // --- END NEW LOGGING ---
-        for (Map.Entry<ParseTree, Symbol> entry : resolvedSymbols.entrySet()) // Iterate entries
-        {
-            ParseTree key = entry.getKey();
-            Interval kint = key.getSourceInterval();
-            // --- START NEW LOGGING ---
-            // Uncomment below for VERY verbose logging if needed
-            // Debug.logDebug("    -> Comparing target " + target + " with key " + key.getText() + " interval " + kint + " (Key Hash: " + key.hashCode() + ")");
-            // --- END NEW LOGGING ---
-            if (kint != null && kint.equals(target))
-            {
-                // --- START NEW LOGGING ---
-                Debug.logDebug("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
-                // --- END NEW LOGGING ---
-                return Optional.ofNullable(entry.getValue());
-            }
-        }
-        // --- START NEW LOGGING ---
-        Debug.logDebug("  -> Interval fallback FAILED.");
-        // --- END NEW LOGGING ---
-        return Optional.empty();
-    }
+		if (node == null)
+		{ /*...*/
+			return Optional.empty();
+		}
 
-    public Optional<Type> getResolvedType(ParseTree node)
-    {
-        if (node == null)
-        {
-            Debug.logDebug("getResolvedType() -> Node is null, returning Optional.empty()");
-            return Optional.empty();
-        }
+		// fast path: direct object-equality lookup
+		Symbol s = resolvedSymbols.get(node);
+		if (s != null)
+		{
+			// --- START NEW LOGGING ---
+			Debug.logDebug("  -> Found symbol via direct lookup: " + s);
+			// --- END NEW LOGGING ---
+			return Optional.of(s);
+		}
 
-        Type t = resolvedTypes.get(node);
-        if (t != null)
-        {
-            Debug.logDebug("getResolvedType() -> Resolved: " + t.getName() + ", returning Optional.of(" + t.getName() + ")");
-            return Optional.of(t);
-        }
+		// fallback: match by source interval
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{ /*...*/
+			return Optional.empty();
+		}
 
-        Interval target = node.getSourceInterval();
-        if (target == null)
-        {
-            return Optional.empty();
-        }
+		// --- START NEW LOGGING ---
+		Debug.logDebug("  -> Direct lookup failed, trying interval fallback...");
+		// --- END NEW LOGGING ---
+		for (Map.Entry<ParseTree, Symbol> entry : resolvedSymbols.entrySet()) // Iterate entries
+		{
+			ParseTree key = entry.getKey();
+			Interval kint = key.getSourceInterval();
+			// --- START NEW LOGGING ---
+			// Uncomment below for VERY verbose logging if needed
+			// Debug.logDebug("    -> Comparing target " + target + " with key " + key.getText() + " interval " + kint + " (Key Hash: " + key.hashCode() + ")");
+			// --- END NEW LOGGING ---
+			if (kint != null && kint.equals(target))
+			{
+				// --- START NEW LOGGING ---
+				Debug.logDebug("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
+				// --- END NEW LOGGING ---
+				return Optional.ofNullable(entry.getValue());
+			}
+		}
+		// --- START NEW LOGGING ---
+		Debug.logDebug("  -> Interval fallback FAILED.");
+		// --- END NEW LOGGING ---
+		return Optional.empty();
+	}
 
-        for (ParseTree key : resolvedTypes.keySet())
-        {
-            Interval kint = key.getSourceInterval();
-            if (kint != null && kint.equals(target))
-            {
-                return Optional.ofNullable(resolvedTypes.get(key));
-            }
-        }
-        return Optional.empty();
-    }
+	public Optional<Type> getResolvedType(ParseTree node)
+	{
+		if (node == null)
+		{
+			Debug.logDebug("getResolvedType() -> Node is null, returning Optional.empty()");
+			return Optional.empty();
+		}
 
-    public Optional<Object> getResolvedInfo(ParseTree node)
-    {
-        if (node == null)
-        {
-            return Optional.empty();
-        }
+		Type t = resolvedTypes.get(node);
+		if (t != null)
+		{
+			Debug.logDebug("getResolvedType() -> Resolved: " + t.getName() + ", returning Optional.of(" + t.getName() + ")");
+			return Optional.of(t);
+		}
+
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{
+			return Optional.empty();
+		}
+
+		for (ParseTree key : resolvedTypes.keySet())
+		{
+			Interval kint = key.getSourceInterval();
+			if (kint != null && kint.equals(target))
+			{
+				return Optional.ofNullable(resolvedTypes.get(key));
+			}
+		}
+		return Optional.empty();
+	}
+
+	public Optional<Object> getResolvedInfo(ParseTree node)
+	{
+		if (node == null)
+		{
+			return Optional.empty();
+		}
 
 
-        Object o = resolvedInfo.get(node);
-        if (o != null)
-        {
-            return Optional.of(o);
-        }
+		Object o = resolvedInfo.get(node);
+		if (o != null)
+		{
+			return Optional.of(o);
+		}
 
-        // fallback by source interval (matches what you already do for symbols/types)
-        Interval target = node.getSourceInterval();
-        if (target == null)
-        {
-            return Optional.empty();
-        }
+		// fallback by source interval (matches what you already do for symbols/types)
+		Interval target = node.getSourceInterval();
+		if (target == null)
+		{
+			return Optional.empty();
+		}
 
-        for (ParseTree key : resolvedInfo.keySet())
-        {
-            Interval kint = key.getSourceInterval();
-            if (kint != null && kint.equals(target))
-            {
-                return Optional.ofNullable(resolvedInfo.get(key));
-            }
-        }
-        return Optional.empty();
-    }
+		for (ParseTree key : resolvedInfo.keySet())
+		{
+			Interval kint = key.getSourceInterval();
+			if (kint != null && kint.equals(target))
+			{
+				return Optional.ofNullable(resolvedInfo.get(key));
+			}
+		}
+		return Optional.empty();
+	}
 
 	String getResolvedSymbolsList()
 	{

@@ -29,6 +29,12 @@ public class NebulaLibLoader
 		Gson g = new GsonBuilder().create();
 		LibraryDTO lib = g.fromJson(json, LibraryDTO.class);
 
+		if(lib == null)
+		{
+			Debug.logError("Unexpected error while loading the library from: " + libFile);
+			return;
+		}
+
 		for (NamespaceDTO ns : lib.namespaces)
 		{
 			String fqn = ns.name;
