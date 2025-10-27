@@ -539,6 +539,8 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitForeachStatement(NebulaParser.ForeachStatementContext ctx)
 	{
+		System.out.println("=================================> Visiting foreach statement: " + ctx.getText());
+
 		// 1. Get loop variable info from semantic pass
 		Optional<Symbol> loopVarSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx.ID());
 		Optional<Type> loopVarNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.ID());

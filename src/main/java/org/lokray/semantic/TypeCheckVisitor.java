@@ -662,7 +662,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				// Check if the initializer is an array initializer
 				if (initializerCtx.getText().startsWith("{")) // A simple but effective check
 				{
-					Debug.logError("=================================> Found an array");
 					// This is the new, context-aware path
 					initializerType = visitArrayInitializerWithContext(
 							initializerCtx.assignmentExpression()
