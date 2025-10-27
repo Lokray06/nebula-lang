@@ -12,6 +12,7 @@ import org.lokray.semantic.info.TraditionalForInfo;
 import org.lokray.semantic.symbol.MethodSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
+import org.lokray.semantic.type.ArrayType;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.util.Debug;
@@ -32,6 +33,10 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	private LLVMBuilderRef builder;
 	private final LLVMModuleRef module;
 	private final LLVMContextRef moduleContext;
+
+	// --- Stack for tracking loop exit blocks (for break/continue) ---
+	private final Stack<LLVMBasicBlockRef> loopExitBlocks = new Stack<>();
+	private final Stack<LLVMBasicBlockRef> loopUpdateBlocks = new Stack<>(); // For continue
 
 	public IRVisitor(SemanticAnalyzer semanticAnalyzer, LLVMContext llvmContext)
 	{
@@ -436,7 +441,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			{
 				if (info.initializer() instanceof NebulaParser.VariableDeclarationContext varDeclCtx)
 				{
-					visitVariableDeclarationForLoopInit(varDeclCtx);
+					visit(varDeclCtx);
 				}
 				else if (info.initializer() instanceof NebulaParser.ExpressionContext exprCtx)
 				{
@@ -529,6 +534,103 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			Debug.logError("Codegen Error: No valid loop information found for ForStatementContext: " + ctx.getText());
 			return null;
 		}
+	}
+
+	@Override
+	public LLVMValueRef visitForeachStatement(NebulaParser.ForeachStatementContext ctx)
+	{
+		// 1. Get loop variable info from semantic pass
+		Optional<Symbol> loopVarSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx.ID());
+		Optional<Type> loopVarNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.ID());
+		if (loopVarSymbolOpt.isEmpty() || loopVarNebulaTypeOpt.isEmpty() || !(loopVarSymbolOpt.get() instanceof VariableSymbol loopVarSymbol))
+		{
+			Debug.logError("IR Error: Could not resolve foreach loop variable symbol: " + ctx.ID().getText());
+			return null;
+		}
+		String loopVarName = loopVarSymbol.getName();
+		Type loopVarNebulaType = loopVarNebulaTypeOpt.get();
+		LLVMTypeRef loopVarLLVMType = TypeConverter.toLLVMType(loopVarNebulaType, moduleContext);
+
+		// 2. Get collection expression (this is the *pointer* to the descriptor)
+		LLVMValueRef collectionDescPtr = visit(ctx.expression());
+		Optional<Type> collectionNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.expression());
+		if (collectionDescPtr == null || collectionNebulaTypeOpt.isEmpty() || !(collectionNebulaTypeOpt.get() instanceof ArrayType collectionArrayType))
+		{
+			Debug.logError("IR Error: Foreach collection is not a valid array: " + ctx.expression().getText());
+			return null;
+		}
+
+		// Get the LLVM type of the *elements* in the collection
+		Type elementNebulaType = collectionArrayType.getElementType();
+		LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(elementNebulaType, moduleContext);
+
+		// 3. Load descriptor and extract size/data pointer
+		LLVMTypeRef arrayDescType = TypeConverter.getArrayDescStructTypeForContext(moduleContext);
+		LLVMValueRef descStruct = LLVMBuildLoad2(builder, arrayDescType, collectionDescPtr, "foreach.desc.load");
+		LLVMValueRef dataPtrI8 = LLVMBuildExtractValue(builder, descStruct, 0, "foreach.data.ptr.i8");
+		LLVMValueRef arraySize = LLVMBuildExtractValue(builder, descStruct, 1, "foreach.size");
+
+		// 4. Cast i8* data pointer to correct element pointer type (e.g., i32* or %nebula_string*)
+		LLVMTypeRef elementPtrType = LLVMPointerType(elementLLVMType, 0);
+		LLVMValueRef dataPtrTyped = LLVMBuildBitCast(builder, dataPtrI8, elementPtrType, "foreach.data.ptr.typed");
+
+		// 5. Create loop counter (alloca for 'i')
+		LLVMValueRef function = currentFunction;
+		LLVMTypeRef i32Type = LLVMInt32TypeInContext(moduleContext);
+		LLVMValueRef counterAlloca = createEntryBlockAlloca(function, i32Type, "foreach.i");
+		LLVMBuildStore(builder, LLVMConstInt(i32Type, 0, 0), counterAlloca); // i = 0
+
+		// 6. Create loop blocks
+		LLVMBasicBlockRef loopHeaderBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "foreach.header");
+		LLVMBasicBlockRef loopBodyBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "foreach.body");
+		LLVMBasicBlockRef loopExitBlock = LLVMAppendBasicBlockInContext(moduleContext, function, "foreach.exit");
+
+		LLVMBuildBr(builder, loopHeaderBlock); // Jump to header
+
+		// 7. Populate Header (Condition check: i < size)
+		LLVMPositionBuilderAtEnd(builder, loopHeaderBlock);
+		LLVMValueRef currentCounter = LLVMBuildLoad2(builder, i32Type, counterAlloca, "foreach.i.load");
+		LLVMValueRef condition = LLVMBuildICmp(builder, LLVMIntULT, currentCounter, arraySize, "foreach.cond"); // Use unsigned compare
+		LLVMBuildCondBr(builder, condition, loopBodyBlock, loopExitBlock);
+
+		// 8. Populate Body
+		LLVMPositionBuilderAtEnd(builder, loopBodyBlock);
+		pushScope(); // <--- CRITICAL: New scope for the loop variable
+
+		// 8a. Get element address: elementPtr = &dataPtrTyped[i]
+		// The constructor new PointerPointer<>(LLVMValueRef) is wrong.
+		// You must use the varargs constructor that takes an array.
+		LLVMValueRef[] indices = { currentCounter };
+		LLVMValueRef elementPtr = LLVMBuildGEP2(builder, elementLLVMType, dataPtrTyped, new PointerPointer<>(indices), 1, "foreach.elem.ptr");
+		// 8b. Load element value: elementVal = *elementPtr
+		LLVMValueRef elementVal = LLVMBuildLoad2(builder, elementLLVMType, elementPtr, "foreach.elem.load");
+
+		// 8c. Create alloca for loop var (e.g., 'num')
+		LLVMValueRef loopVarAlloca = createEntryBlockAlloca(function, loopVarLLVMType, loopVarName);
+
+		// 8d. Cast element value to loop var type (e.g. if element is int8 and var is int32)
+		LLVMValueRef castedElementVal = buildCast(builder, elementVal, loopVarLLVMType, "foreach.var.cast");
+		LLVMBuildStore(builder, castedElementVal, loopVarAlloca); // num = elementVal
+
+		// 8e. Add loop var alloca to scope so visitPrimary can find it
+		addVariableToScope(loopVarName, loopVarAlloca);
+
+		// 8f. Visit the loop body statement
+		visit(ctx.statement());
+
+		popScope(); // <--- CRITICAL: End loop variable's scope
+
+		// 8g. Increment counter: i = i + 1
+		LLVMValueRef nextCounter = LLVMBuildAdd(builder, currentCounter, LLVMConstInt(i32Type, 1, 0), "foreach.i.inc");
+		LLVMBuildStore(builder, nextCounter, counterAlloca);
+
+		// 8h. Branch back to header
+		LLVMBuildBr(builder, loopHeaderBlock);
+
+		// 9. Populate Exit Block
+		LLVMPositionBuilderAtEnd(builder, loopExitBlock);
+
+		return null; // foreach statement returns no value
 	}
 
 	private void visitIfStatementRecursive(NebulaParser.IfStatementContext ctx, LLVMBasicBlockRef finalMergeBlock)
@@ -786,8 +888,139 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			Debug.logError("IR Error: Could not resolve type for variable declaration: " + ctx.type().getText());
 			return null;
 		}
+		Type nebulaType = nebulaTypeOpt.get();
 
-		LLVMTypeRef varLLVMType = TypeConverter.toLLVMType(nebulaTypeOpt.get(), moduleContext);
+		// --- NEW: Handle Array Declarations ---
+		if (nebulaType instanceof ArrayType arrayNebulaType)
+		{
+			LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(arrayNebulaType.getElementType(), moduleContext);
+			LLVMTypeRef arrayDescLLVMType = TypeConverter.getArrayDescStructTypeForContext(moduleContext);
+
+			// We must loop through each declarator (e.g., int[] a, b, c)
+			// The logic for size detection and allocation must be *inside* this loop.
+			for (NebulaParser.VariableDeclaratorContext declarator : ctx.variableDeclarator())
+			{
+				String varName = declarator.ID().getText();
+				int finalArraySize = -1;
+				NebulaParser.ArrayInitializerContext initCtx = null;
+
+				// --- 1. DETERMINE SIZE ---
+				// Check for explicit size (e.g., new int[5]).
+				// NOTE: Your current grammar doesn't support `int[5] numbers;` but `new int[5]`.
+				// This code assumes size comes from an initializer if not explicit in the type.
+				// For `int[] numbers`, explicit size is -1.
+				if (ctx.type().L_BRACK_SYM().size() > 0 && ctx.type().getChildCount() == 3)
+				{
+					finalArraySize = -1; // Size omitted, must come from initializer
+				}
+				// ... (add logic for explicit size `int[5]` if your grammar changes) ...
+
+
+				// Check initializer for size
+				if (declarator.expression() != null)
+				{
+					initCtx = findArrayInitializer(declarator.expression());
+					if (initCtx != null)
+					{
+						int initSize = initCtx.arrayElement().size();
+						if (finalArraySize == -1)
+						{
+							finalArraySize = initSize; // Size inferred from initializer
+							Debug.logDebug("IR: Inferred array size " + finalArraySize + " for '" + varName + "'.");
+						}
+						else if (finalArraySize != initSize)
+						{
+							Debug.logError("IR Error: Initializer size (" + initSize + ") does not match declared array size (" + finalArraySize + ") for '" + varName + "'.");
+							continue; // Skip this declarator
+						}
+					}
+					else
+					{
+						Debug.logError("IR Error: Array variable '" + varName + "' must be initialized with an array initializer literal { ... }.");
+						continue;
+					}
+				}
+				else if (finalArraySize == -1)
+				{
+					Debug.logError("IR Error: Array variable '" + varName + "' declared without size must have an initializer.");
+					continue;
+				}
+
+				// --- 2. ALLOCATE (now that we have the size) ---
+				if (finalArraySize == -1)
+				{
+					Debug.logError("IR Error: Could not determine final array size for '" + varName + "'.");
+					continue;
+				}
+
+				// Create the LLVM array type (e.g., [5 x i32])
+				LLVMTypeRef arrayDataLLVMType = LLVMArrayType2(elementLLVMType, finalArraySize);
+
+				// 2a. Allocate space for the actual array data [Size x ElementType]
+				LLVMValueRef dataAlloca = createEntryBlockAlloca(currentFunction, arrayDataLLVMType, varName + ".data");
+
+				// 2b. Allocate space for the descriptor struct { i8*, i32 }
+				LLVMValueRef descAlloca = createEntryBlockAlloca(currentFunction, arrayDescLLVMType, varName);
+
+				// --- 3. INITIALIZE DESCRIPTOR ---
+				LLVMValueRef zero = LLVMConstInt(LLVMInt32Type(), 0, 0);
+				LLVMValueRef[] indices = {zero, zero}; // Index into [Size x Type] -> get pointer to first element
+				LLVMValueRef dataPtr = LLVMBuildGEP2(builder, arrayDataLLVMType, dataAlloca, new PointerPointer<>(indices), 2, varName + ".ptr");
+
+				// 3b. Cast dataPtr to i8* for storing in the descriptor
+				LLVMValueRef dataPtrI8 = LLVMBuildBitCast(builder, dataPtr, LLVMPointerType(LLVMInt8TypeInContext(moduleContext), 0), varName + ".ptr.i8");
+
+				// 3c. Store dataPtrI8 and size into the descriptor struct
+				LLVMValueRef dataPtrField = LLVMBuildStructGEP2(builder, arrayDescLLVMType, descAlloca, 0, varName + ".data.ptr.addr");
+				LLVMValueRef sizeField = LLVMBuildStructGEP2(builder, arrayDescLLVMType, descAlloca, 1, varName + ".size.addr");
+				LLVMBuildStore(builder, dataPtrI8, dataPtrField);
+				LLVMBuildStore(builder, LLVMConstInt(LLVMInt32Type(), finalArraySize, 0), sizeField);
+
+				// --- 4. FILL ARRAY DATA (if initializer exists) ---
+				if (initCtx != null)
+				{
+					// Visit each element and store it
+					for (int i = 0; i < finalArraySize; i++)
+					{
+						// We must visit the expression inside the array element
+						LLVMValueRef elementVal = visit(initCtx.arrayElement(i).expression());
+						if (elementVal == null)
+						{
+							continue; // Skip if visiting failed
+						}
+
+						// Cast element value to the array's element type
+						elementVal = buildCast(builder, elementVal, elementLLVMType, "init_cast");
+
+						// If elementVal is a pointer to a struct (e.g., a global string literal)
+						// and the array stores struct *values*, we must load it first.
+						if (LLVMGetTypeKind(LLVMTypeOf(elementVal)) == LLVMPointerTypeKind && LLVMGetTypeKind(elementLLVMType) == LLVMStructTypeKind && LLVMGetElementType(LLVMTypeOf(elementVal)).equals(elementLLVMType))
+						{
+							elementVal = LLVMBuildLoad2(builder, elementLLVMType, elementVal, "global.load");
+						}
+
+						// Get pointer to the i-th element
+						LLVMValueRef idxVal = LLVMConstInt(LLVMInt32Type(), i, 0);
+						LLVMValueRef[] elementIndices = {zero, idxVal};
+						LLVMValueRef elementPtr = LLVMBuildGEP2(builder, arrayDataLLVMType, dataAlloca, new PointerPointer<>(elementIndices), 2, varName + ".elem." + i + ".ptr");
+
+						// Store the value
+						LLVMBuildStore(builder, elementVal, elementPtr);
+					}
+				}
+
+				// --- 5. ADD TO SCOPE ---
+				// Add the *descriptor* alloca to the scope, not the data alloca
+				addVariableToScope(varName, descAlloca);
+				namedValues.put(varName, descAlloca); // Store descriptor pointer
+			}
+			return null; // Handled array declaration
+		}
+		// --- End Array Handling ---
+
+
+		// --- Existing Primitive/Other Type Handling ---
+		LLVMTypeRef varLLVMType = TypeConverter.toLLVMType(nebulaType, moduleContext);
 
 		for (NebulaParser.VariableDeclaratorContext declarator : ctx.variableDeclarator())
 		{
@@ -849,39 +1082,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			namedValues.put(varName, varAlloca);
 		}
 		return null;
-	}
-
-	// --- Optional Helper for Traditional For Loop Initializer ---
-	// This ensures variables declared in the 'for' initializer use createEntryBlockAlloca
-	private void visitVariableDeclarationForLoopInit(NebulaParser.VariableDeclarationContext ctx)
-	{
-		Optional<Type> nebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.type()); //
-		if (nebulaTypeOpt.isEmpty())
-		{ /* ... error handling ... */
-			return;
-		}
-		LLVMTypeRef varType = TypeConverter.toLLVMType(nebulaTypeOpt.get(), moduleContext); //
-
-		for (NebulaParser.VariableDeclaratorContext declarator : ctx.variableDeclarator())
-		{ //
-			String varName = declarator.ID().getText(); //
-			// *** Use createEntryBlockAlloca for loop init vars ***
-			LLVMValueRef varAlloca = createEntryBlockAlloca(currentFunction, varType, varName);
-
-			if (declarator.expression() != null)
-			{
-				LLVMValueRef initVal = visit(declarator.expression()); //
-				if (initVal != null)
-				{
-					LLVMBuildStore(builder, initVal, varAlloca); //
-				}
-				else
-				{ /* ... error handling ... */ }
-			}
-			// else: Uninitialized variable
-
-			namedValues.put(varName, varAlloca); // Make available within loop scope
-		}
 	}
 
 	@Override
@@ -1116,27 +1316,109 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
 	{
-		// --- START NEW LOGGING ---
+		// ... (existing logging) ...
 		Debug.logDebug("IR (Postfix): Visiting: " + ctx.getText() +
 				" (Hash: " + ctx.hashCode() +
 				", Interval: " + ctx.getSourceInterval() + ")");
-		// --- END NEW LOGGING ---
 
-		// Check if the *entire* postfix expression (e.g., "getPi()")
-		// was resolved to a MethodSymbol by the TypeCheckVisitor.
+
 		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+		Optional<Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx); // Get the final type
 
+		// --- Handle Array Element Access arr[idx] ---
+		if (ctx.expression() != null && !ctx.expression().isEmpty() && ctx.L_BRACK_SYM().size() > 0)
+		{
+			Debug.logDebug("IR (Postfix): Detected potential array access.");
+
+			// 1. Visit the base expression (e.g., 'arr') to get the descriptor alloca
+			LLVMValueRef baseDescPtr = visit(ctx.primary()); // Assuming base is primary for now
+			if (baseDescPtr == null)
+			{
+				// Might be a more complex base like obj.arrayField[i] - needs full handling
+				Debug.logError("IR Error: Base of array access is null or complex access not implemented: " + ctx.primary().getText());
+				return null;
+			}
+
+			// Check if the base 'arr' is indeed an array descriptor pointer (alloca result)
+			LLVMTypeRef baseDescPtrType = LLVMTypeOf(baseDescPtr);
+			LLVMTypeRef arrayDescType = TypeConverter.getArrayDescStructTypeForContext(moduleContext);
+			if (LLVMGetTypeKind(baseDescPtrType) != LLVMPointerTypeKind || !LLVMGetElementType(baseDescPtrType).equals(arrayDescType))
+			{
+				Debug.logError("IR Error: Base of array access is not an array descriptor: " + ctx.primary().getText());
+				return null;
+			}
+
+
+			// 2. Visit the index expression
+			LLVMValueRef indexVal = visit(ctx.expression(0)); // Assuming single index for now
+			if (indexVal == null)
+			{
+				Debug.logError("IR Error: Failed to generate IR for array index: " + ctx.expression(0).getText());
+				return null;
+			}
+			// Ensure index is integer type (semantic analysis should guarantee this, but cast if needed)
+			indexVal = buildCast(builder, indexVal, LLVMInt32TypeInContext(moduleContext), "idx_cast"); // Assume i32 index
+
+
+			// 3. Load the descriptor struct
+			LLVMValueRef descStruct = LLVMBuildLoad2(builder, arrayDescType, baseDescPtr, "arr.desc.load");
+
+			// 4. Extract the data pointer (i8*) from the struct (index 0)
+			LLVMValueRef dataPtrI8 = LLVMBuildExtractValue(builder, descStruct, 0, "arr.data.ptr.i8");
+
+			// --- Bounds Checking ---
+			LLVMValueRef sizeVal = LLVMBuildExtractValue(builder, descStruct, 1, "arr.size");
+			LLVMValueRef isInBounds = LLVMBuildICmp(builder, LLVMIntULT, indexVal, sizeVal, "bounds.check"); // Unsigned comparison
+
+			LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
+			LLVMValueRef function = LLVMGetBasicBlockParent(currentBlock);
+			LLVMBasicBlockRef thenBlock = LLVMAppendBasicBlock(function, "bounds.ok");
+			LLVMBasicBlockRef elseBlock = LLVMAppendBasicBlock(function, "bounds.err");
+
+			LLVMBuildCondBr(builder, isInBounds, thenBlock, elseBlock);
+
+			LLVMPositionBuilderAtEnd(builder, elseBlock);
+			// Call a runtime error function, print message, or trap
+			// Example: call void @runtime_error("Index out of bounds")
+			LLVMBuildUnreachable(builder); // Terminate error block
+
+			LLVMPositionBuilderAtEnd(builder, thenBlock); // Continue GEP in the 'then' block
+			// --- End Bounds Checking ---
+
+
+			// 5. Cast the i8* data pointer back to the correct element pointer type
+			Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
+			if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType))
+			{
+				Debug.logError("IR Error: Cannot determine element type for array access: " + ctx.primary().getText());
+				return null;
+			}
+			LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(baseArrayType.getElementType(), moduleContext);
+			LLVMTypeRef elementPtrType = LLVMPointerType(elementLLVMType, 0);
+			LLVMValueRef dataPtrTyped = LLVMBuildBitCast(builder, dataPtrI8, elementPtrType, "arr.data.ptr.typed");
+
+			// 6. Build the GEP instruction to get the element address
+			LLVMValueRef elementPtr = LLVMBuildGEP2(builder, elementLLVMType, dataPtrTyped, new PointerPointer<>(indexVal), 1, "arr.elem.ptr");
+
+			// IMPORTANT: Return the POINTER to the element.
+			// The parent expression (e.g., assignment, another operation) will handle loading/storing.
+			Debug.logDebug("IR (Postfix): Array access returning element pointer.");
+			return elementPtr;
+		}
+		// --- End Array Element Access ---
+
+		// --- Existing Method Call Handling ---
 		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
 		{
-			// --- This is a method call used as an expression ---
 			Debug.logDebug("IR (Postfix): Resolved as method call: " + methodSymbol);
 
 			String mangledName = methodSymbol.getMangledName();
 			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
 
-			// 1. Create Function Prototype if it doesn't exist [cite: 1447]
+			// 1. Create Function Prototype if it doesn't exist
 			if (function == null)
 			{
+				// ... (existing prototype creation) ...
 				Debug.logDebug("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
 				List<Type> paramTypes = methodSymbol.getParameterTypes();
 				LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
@@ -1149,12 +1431,11 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				function = LLVMAddFunction(module, mangledName, functionType);
 			}
 
-			// 2. Prepare arguments [cite: 1447]
+			// 2. Prepare arguments
 			List<LLVMValueRef> args = new ArrayList<>();
-			List<Type> expectedParamTypes = methodSymbol.getParameterTypes(); // <--- Get expected types [cite: 1448]
-			// Find the ArgumentListContext child node
+			List<Type> expectedParamTypes = methodSymbol.getParameterTypes();
 			NebulaParser.ArgumentListContext argListCtx = null;
-			for (int i = 0; i < ctx.getChildCount(); i++) // [cite: 1448]
+			for (int i = 0; i < ctx.getChildCount(); i++)
 			{
 				if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
 				{
@@ -1166,40 +1447,20 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			if (argListCtx != null)
 			{
 				Debug.logDebug("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
-				for (int i = 0; i < argListCtx.expression().size(); i++) // [cite: 1449]
+				for (int i = 0; i < argListCtx.expression().size(); i++)
 				{
 					NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
-					// --- START NEW LOGGING ---
 					Debug.logDebug("IR (Postfix): Visiting argument #" + i + ": " + exprCtx.getText() +
 							" (Hash: " + exprCtx.hashCode() +
 							", Interval: " + exprCtx.getSourceInterval() + ")");
-					// --- END NEW LOGGING ---
 					LLVMValueRef argValue = visit(exprCtx);
 
-					// --- NEW CONVERSION LOGIC --- [cite: 1450]
-					if (i < expectedParamTypes.size() && argValue != null) // [cite: 1450]
+					// Argument Type Conversion
+					if (i < expectedParamTypes.size() && argValue != null)
 					{
 						Type targetType = expectedParamTypes.get(i);
-						LLVMTypeRef targetLLVMType = TypeConverter.toLLVMType(targetType, moduleContext); // [cite: 1451]
-						LLVMTypeRef actualLLVMType = LLVMTypeOf(argValue);
-
-						// Check if argument needs promotion/conversion (e.g., int to double) [cite: 1452]
-						if (!actualLLVMType.equals(targetLLVMType)) // [cite: 1452]
-						{
-							// This is a common conversion utility, assuming you have one or build one. [cite: 1453]
-							// For int-to-double: [cite: 1453]
-							if (LLVMGetTypeKind(actualLLVMType) == LLVMIntegerTypeKind && // [cite: 1453]
-									LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind) // [cite: 1454]
-							{
-								// Convert Signed Integer to Floating Point [cite: 1455]
-								argValue = LLVMBuildSIToFP(builder, argValue, targetLLVMType, "arg_sitofp"); // [cite: 1455]
-							}
-							// Add logic for int->float, float->double (fpext) if needed, [cite: 1456]
-							// but int->double fixes this specific case. [cite: 1456]
-						}
+						argValue = buildCast(builder, argValue, TypeConverter.toLLVMType(targetType, moduleContext), "arg_cast" + i);
 					}
-					// --- END CONVERSION LOGIC --- [cite: 1457]
-
 					args.add(argValue);
 				}
 			}
@@ -1210,23 +1471,56 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				argsPtr.put(i, args.get(i));
 			}
 
-			// 3. Build the call instruction [cite: 1458]
+			// 3. Build the call instruction
 			Debug.logDebug("IR (Postfix): Building LLVM call instruction for: " + mangledName);
-			// This call *returns a value*, so we return the LLVMValueRef from the call. [cite: 1458]
-			return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), methodSymbol.getName() + ".call");
+			String callName = ""; // Default to void return
+			if (methodSymbol.getType() != PrimitiveType.VOID)
+			{
+				callName = methodSymbol.getName() + ".call"; // Name result if non-void
+			}
+			return LLVMBuildCall2(builder, safeGetFunctionType(function, methodSymbol), function, argsPtr, args.size(), callName);
 		}
-		else
+		// --- End Method Call Handling ---
+
+		// --- Handle Postfix Inc/Dec ---
+		if (ctx.INC_OP().size() > 0 || ctx.DEC_OP().size() > 0)
 		{
-			// --- Not a method call ---
-			// This is likely a variable access (like "fPi") or member access. [cite: 1458]
-			// Just visit the primary part to load the variable. [cite: 1458]
-			// --- START NEW LOGGING ---
-			Debug.logDebug("IR (Postfix): Not a method call. Visiting Primary child: " + ctx.primary().getText() +
-					" (Hash: " + ctx.primary().hashCode() +
-					", Interval: " + ctx.primary().getSourceInterval() + ")");
-			// --- END NEW LOGGING ---
-			return visit(ctx.primary());
+			LLVMValueRef baseVal = visit(ctx.primary()); // Get the L-Value (address)
+			if (baseVal == null || LLVMGetTypeKind(LLVMTypeOf(baseVal)) != LLVMPointerTypeKind)
+			{
+				Debug.logError("IR Error: Postfix increment/decrement requires a variable or addressable element.");
+				return null;
+			}
+
+			LLVMTypeRef elementType = LLVMGetElementType(LLVMTypeOf(baseVal));
+			LLVMValueRef loadedVal = LLVMBuildLoad2(builder, elementType, baseVal, "postop.load");
+			LLVMValueRef resultVal; // The value *before* the operation
+			LLVMValueRef newVal;
+
+			LLVMValueRef one = LLVMConstInt(elementType, 1, 0);
+
+			if (!ctx.INC_OP().isEmpty())
+			{ // Post-increment x++
+				newVal = LLVMBuildAdd(builder, loadedVal, one, "postinc");
+				resultVal = loadedVal; // Return the original value
+			}
+			else
+			{ // Post-decrement x--
+				newVal = LLVMBuildSub(builder, loadedVal, one, "postdec");
+				resultVal = loadedVal; // Return the original value
+			}
+
+			LLVMBuildStore(builder, newVal, baseVal); // Store the modified value back
+			return resultVal; // Return the value *before* modification
 		}
+		// --- End Postfix Inc/Dec ---
+
+
+		// --- Fallback: Variable Access ---
+		Debug.logDebug("IR (Postfix): Not a method call or array access. Visiting Primary child: " + ctx.primary().getText() +
+				" (Hash: " + ctx.primary().hashCode() +
+				", Interval: " + ctx.primary().getSourceInterval() + ")");
+		return visit(ctx.primary()); // Load variable value if primary is ID
 	}
 
 	@Override
@@ -1390,6 +1684,14 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 						Debug.logDebug("IR: variable '" + varSym.getName() + "' used but no alloca found in any scope. Are you missing an allocation?"); // [cite: 1481]
 						return null; // [cite: 1481]
 						// --- END MODIFIED ERROR --- [cite: 1481]
+					}
+
+					// If the variable is an array, return the pointer to its descriptor (the alloca) directly.
+					// Do NOT load it. Callers (like foreach or array_access) expect the pointer.
+					if (varSym.getType() instanceof ArrayType)
+					{
+						Debug.logDebug("IR (Primary): Resolved '" + name + "' as ArrayType. Returning alloca (pointer) directly.");
+						return alloca;
 					}
 
 					// Load the variable value and return it [cite: 1482]
@@ -2151,5 +2453,43 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		// Fallback for other complex or unsupported cases
 		Debug.logDebug("IR: Attempted unsupported numeric cast from " + LLVMPrintTypeToString(sourceType) + " to " + LLVMPrintTypeToString(targetType));
 		return sourceValue;
+	}
+
+	/**
+	 * Helper to dig through the expression chain to find a nested array initializer.
+	 * Based on the parse tree: expression -> ... -> primary -> arrayInitializer
+	 */
+	private NebulaParser.ArrayInitializerContext findArrayInitializer(NebulaParser.ExpressionContext ctx)
+	{
+		if (ctx == null)
+		{
+			return null;
+		}
+		try
+		{
+			// This chain matches the one used in visitVariableDeclaration
+			return ctx.assignmentExpression()
+					.conditionalExpression(0)
+					.logicalOrExpression()
+					.logicalAndExpression(0)
+					.bitwiseOrExpression(0)
+					.bitwiseXorExpression(0)
+					.bitwiseAndExpression(0)
+					.equalityExpression(0)
+					.relationalExpression(0)
+					.shiftExpression(0)
+					.additiveExpression(0)
+					.multiplicativeExpression(0)
+					.powerExpression(0)
+					.unaryExpression(0)
+					.postfixExpression()
+					.primary()
+					.arrayInitializer();
+		}
+		catch (Exception e)
+		{
+			// This happens if any part of the chain is null, meaning it's not a simple array initializer
+			return null;
+		}
 	}
 }

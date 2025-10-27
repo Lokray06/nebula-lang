@@ -640,52 +640,66 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return visitChildren(ctx);
 	}
 
+	// --- Statements ---
 	@Override
 	public Type visitVariableDeclaration(NebulaParser.VariableDeclarationContext ctx)
 	{
 		Type declaredType = resolveType(ctx.type());
 		note(ctx.type(), declaredType);
-		Type sharedInitializerType = null;
-
-		NebulaParser.VariableDeclaratorContext lastDecl =
-				ctx.variableDeclarator(ctx.variableDeclarator().size() - 1);
-
-		if (lastDecl.expression() != null)
-		{
-			// --- FIX ---
-			// Visit the initializer, telling it we EXPECT the variable's declared type.
-			// This is how `float fPi = getPi()` works.
-			sharedInitializerType = visitExpecting(lastDecl.expression(), declaredType);
-		}
-
 		for (var declarator : ctx.variableDeclarator())
 		{
 			String varName = declarator.ID().getText();
-
 			if (currentScope.resolveLocally(varName).isPresent())
 			{
 				logError(declarator.ID().getSymbol(), "Variable '" + varName + "' is already defined in this scope.");
 				continue;
 			}
-
-			// --- FIX ---
-			// Use visitExpecting here as well for other declarators.
-			Type initializerType = declarator.expression() != null
-					? visitExpecting(declarator.expression(), declaredType)
-					: (sharedInitializerType != null && declarator != lastDecl ? sharedInitializerType : null);
-
-			if (initializerType != null && !initializerType.isAssignableTo(declaredType))
+			if (declarator.expression() != null)
 			{
-				logError(declarator.start,
-						"Incompatible types: cannot assign '" + initializerType.getName()
-								+ "' to '" + declaredType.getName() + "'.");
-			}
+				Type initializerType;
+				NebulaParser.ExpressionContext initializerCtx = declarator.expression();
 
+				// Check if the initializer is an array initializer
+				if (initializerCtx.getText().startsWith("{")) // A simple but effective check
+				{
+					Debug.logError("=================================> Found an array");
+					// This is the new, context-aware path
+					initializerType = visitArrayInitializerWithContext(
+							initializerCtx.assignmentExpression()
+									.conditionalExpression(0)
+									.logicalOrExpression()
+									.logicalAndExpression(0)
+									.bitwiseOrExpression(0)
+									.bitwiseXorExpression(0)
+									.bitwiseAndExpression(0)
+									.equalityExpression(0)
+									.relationalExpression(0)
+									.shiftExpression(0)
+									.additiveExpression(0)
+									.multiplicativeExpression(0)
+									.powerExpression(0)
+									.unaryExpression(0)
+									.postfixExpression()
+									.primary()
+									.arrayInitializer(),
+							declaredType
+					);
+				}
+				else
+				{
+					// The original path for all other expression types
+					initializerType = visit(initializerCtx);
+				}
+
+				if (!initializerType.isAssignableTo(declaredType))
+				{
+					logError(declarator.expression().start, "Incompatible types: cannot assign '" + initializerType.getName() + "' to '" + declaredType.getName() + "'.");
+				}
+			}
 			VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
 			currentScope.define(varSymbol);
 			note(declarator, varSymbol);
 		}
-
 		return PrimitiveType.VOID;
 	}
 
@@ -2723,5 +2737,127 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		}
 		// if (inEscape) { ... handle trailing backslash error ... }
 		return sb.toString();
+	}
+
+	/**
+	 * Visits an array initializer with the context of the type it's being assigned to.
+	 *
+	 * @param ctx          The ArrayInitializerContext from the parse tree.
+	 * @param expectedType The type of the variable being declared (e.g., int[] or int[][]).
+	 * @return The expectedType if all elements are assignable, otherwise ErrorType.
+	 */
+	private Type visitArrayInitializerWithContext(NebulaParser.ArrayInitializerContext ctx, Type expectedType)
+	{
+		Debug.logWarning("Visiting array initializer: " + ctx.getText() + " with expected type " + expectedType.getName());
+
+		// 1. Ensure the target type is actually an array
+		if (!expectedType.isArray())
+		{
+			logError(ctx.start, "Array initializer can only be used to initialize an array. Expected non-array type '" + expectedType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+
+		// For int[], expectedElementType is int.
+		// For int[][], expectedElementType is int[].
+		Type expectedElementType = ((ArrayType) expectedType).getElementType();
+
+		// 2. Visit each element in the initializer
+		for (NebulaParser.ArrayElementContext elementCtx : ctx.arrayElement())
+		{
+			if (elementCtx.expression() != null)
+			{
+				// Check if this expression is itself a nested array initializer
+				NebulaParser.ArrayInitializerContext nestedCtx = findArrayInitializer(elementCtx.expression());
+
+				if (nestedCtx != null)
+				{
+					// --- This is a nested initializer (e.g., {1, 2, 3}) ---
+
+					// NEW CHECK: Is the expected element type *also* an array?
+					if (expectedElementType.isArray())
+					{
+						// YES. This is correct.
+						// e.g., We expect int[][] and this element is {...}.
+						// The expectedElementType is int[], which is an array. We recurse.
+						visitArrayInitializerWithContext(nestedCtx, expectedElementType);
+					}
+					else
+					{
+						// NO. This is the error!
+						// e.g., We expect int[] and this element is {...}.
+						// The expectedElementType is int, which is NOT an array.
+						// Log a *better* error message right here.
+						logError(nestedCtx.start, "Invalid nested array initializer. Expected element of type '" + expectedElementType.getName() + "' but found an array initializer.");
+					}
+				}
+				else
+				{
+					// --- This is a simple expression (e.g., 1 or "apple") ---
+					// We visit it, telling the visitor we expect the element type.
+					Type actualElementType = visitExpecting(elementCtx.expression(), expectedElementType);
+
+					if (!actualElementType.isAssignableTo(expectedElementType))
+					{
+						// This will now catch errors like int[][] x = { 1 };
+						// because actualElementType will be 'int' and expectedElementType will be 'int[]'.
+						logError(elementCtx.expression().start, "Incompatible types in array initializer: cannot convert '" + actualElementType.getName() + "' to '" + expectedElementType.getName() + "'.");
+					}
+				}
+			}
+			else if (elementCtx.arrayInitializer() != null)
+			{
+				// This branch is probably not reachable, but we'll fix it just in case.
+				if (expectedElementType.isArray())
+				{
+					visitArrayInitializerWithContext(elementCtx.arrayInitializer(), expectedElementType);
+				}
+				else
+				{
+					logError(elementCtx.arrayInitializer().start, "Invalid nested array initializer. Expected element of type '" + expectedElementType.getName() + "' but found an array initializer.");
+				}
+			}
+		}
+
+		// 4. If all checks pass, the type of the initializer is the expected array type
+		note(ctx, expectedType);
+		return expectedType;
+	}
+
+	/**
+	 * Helper to dig through the expression chain to find a nested array initializer.
+	 * Based on the parse tree: expression -> ... -> primary -> arrayInitializer
+	 */
+	private NebulaParser.ArrayInitializerContext findArrayInitializer(NebulaParser.ExpressionContext ctx)
+	{
+		if (ctx == null)
+		{
+			return null;
+		}
+		try
+		{
+			// This chain matches the one in visitVariableDeclaration and the parse tree
+			return ctx.assignmentExpression()
+					.conditionalExpression(0)
+					.logicalOrExpression()
+					.logicalAndExpression(0)
+					.bitwiseOrExpression(0)
+					.bitwiseXorExpression(0)
+					.bitwiseAndExpression(0)
+					.equalityExpression(0)
+					.relationalExpression(0)
+					.shiftExpression(0)
+					.additiveExpression(0)
+					.multiplicativeExpression(0)
+					.powerExpression(0)
+					.unaryExpression(0)
+					.postfixExpression()
+					.primary()
+					.arrayInitializer();
+		}
+		catch (Exception e)
+		{
+			// This happens if any part of the chain is null, meaning it's not a simple array initializer
+			return null;
+		}
 	}
 }
