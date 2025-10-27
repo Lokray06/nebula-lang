@@ -245,14 +245,11 @@ public class SemanticAnalyzer
 
 	public Optional<Symbol> getResolvedSymbol(ParseTree node)
 	{
-		// --- START NEW LOGGING ---
 		String nodeText = (node != null) ? node.getText() : "null";
 		int nodeHash = (node != null) ? node.hashCode() : 0;
 		Interval nodeInterval = (node != null) ? node.getSourceInterval() : null;
 		// Use WARNING level temporarily to make sure it stands out
-		Debug.logDebug("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText +
-				" (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
-		// --- END NEW LOGGING ---
+		Debug.logDebug("SemanticAnalyzer.getResolvedSymbol called for node: " + nodeText + " (Hash: " + nodeHash + ", Interval: " + nodeInterval + ")");
 
 		if (node == null)
 		{ /*...*/
@@ -263,9 +260,7 @@ public class SemanticAnalyzer
 		Symbol s = resolvedSymbols.get(node);
 		if (s != null)
 		{
-			// --- START NEW LOGGING ---
-			Debug.logDebug("  -> Found symbol via direct lookup: " + s);
-			// --- END NEW LOGGING ---
+			Debug.logDebug("  -> Found symbol via direct lookup: " + s.getName());
 			return Optional.of(s);
 		}
 
@@ -276,9 +271,7 @@ public class SemanticAnalyzer
 			return Optional.empty();
 		}
 
-		// --- START NEW LOGGING ---
 		Debug.logDebug("  -> Direct lookup failed, trying interval fallback...");
-		// --- END NEW LOGGING ---
 		for (Map.Entry<ParseTree, Symbol> entry : resolvedSymbols.entrySet()) // Iterate entries
 		{
 			ParseTree key = entry.getKey();
