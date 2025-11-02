@@ -219,6 +219,21 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return null;
 	}
 
+	@Override
+	public Type visitCompilationUnit(NebulaParser.CompilationUnitContext ctx)
+	{
+		// 1. Visit all children (namespaces, imports, classes, etc.)
+		visitChildren(ctx);
+
+		// 2. CRUCIAL FIX: Reset currentScope to globalScope.
+		// This prevents any scope corruption from leaking into the next file
+		// when the visitor object is reused in the NdkCompiler loop.
+		this.currentScope = this.globalScope; // <--- ADD THIS LINE
+
+		// No type for a compilation unit
+		return null;
+	}
+
 	// --- Scope Management ---
 	@Override
 	public Type visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
@@ -350,8 +365,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		Type declaredReturnType = resolveType(ctx.type());
 
 		// Find the exact matching method symbol (matches both params + return type)
-		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope)
-				.resolveMethodBySignature(methodName, paramTypes, declaredReturnType);
+		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethodBySignature(methodName, paramTypes, declaredReturnType);
 
 		if (methodOpt.isEmpty())
 		{

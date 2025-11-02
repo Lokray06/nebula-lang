@@ -16,12 +16,12 @@ import java.util.*;
 
 public class SemanticAnalyzer
 {
-	private final Scope globalScope = new Scope(null);
+	public Scope globalScope = new Scope(null);
 	private boolean hasErrors = false;
-	private final Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
-	private final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
-	private final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
-	private final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
+	public Map<String, ClassSymbol> declaredClasses = new LinkedHashMap<>();
+	public final Map<ParseTree, Type> resolvedTypes = new HashMap<>();
+	public final Map<ParseTree, Symbol> resolvedSymbols = new HashMap<>();
+	public final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
 	private final ErrorHandler errorHandler;
 
 	public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
@@ -51,9 +51,6 @@ public class SemanticAnalyzer
 						int lastDotIndex = fqn.lastIndexOf('.');
 						// The simple name is the substring after the last dot.
 						String simpleName = fqn.substring(lastDotIndex + 1);
-
-						// Skip string (assuming you only want the lowercase 'string' alias later)
-						//if(simpleName.equalsIgnoreCase("string")) continue;
 
 						// 2. Define an AliasSymbol in the global scope for the simple name pointing to the ClassSymbol.
 						ClassSymbol classSymbol = entry.getValue();
