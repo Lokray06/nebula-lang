@@ -916,7 +916,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			noteInfo(ctx, info);
 
 			visit(ctx.block()); // Visit body [cite: 2558]
-			System.out.println("SOMETHING'S VERY WRONG");
 		}
 
 		currentScope = currentScope.getEnclosingScope();
@@ -2761,8 +2760,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	 */
 	private Type visitArrayInitializerWithContext(NebulaParser.ArrayInitializerContext ctx, Type expectedType)
 	{
-		Debug.logWarning("Visiting array initializer: " + ctx.getText() + " with expected type " + expectedType.getName());
-
 		// 1. Ensure the target type is actually an array
 		if (!expectedType.isArray())
 		{
