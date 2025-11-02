@@ -1,4 +1,3 @@
-// File: src/main/java/org/lokray/util/ProcessUtils.java
 package org.lokray.util;
 
 import java.io.BufferedReader;

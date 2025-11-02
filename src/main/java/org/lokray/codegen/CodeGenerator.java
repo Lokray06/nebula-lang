@@ -3,7 +3,7 @@ package org.lokray.codegen;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.Pointer;
-import org.bytedeco.llvm.LLVM.LLVMModuleRef; // <-- ADD THIS IMPORT
+import org.bytedeco.llvm.LLVM.LLVMModuleRef;
 import org.lokray.semantic.SemanticAnalyzer;
 import org.lokray.util.Debug;
 
@@ -15,8 +15,6 @@ import static org.bytedeco.llvm.global.LLVM.*;
 public class CodeGenerator
 {
 	// STATIC INITIALIZER BLOCK
-	// This will run once when the CodeGenerator class is first loaded,
-	// ensuring LLVM is initialized before any code generation happens.
 	static
 	{
 		LLVMInitializeAllTargetInfos();
@@ -40,7 +38,7 @@ public class CodeGenerator
 
 	public void generate() throws IOException
 	{
-		// 1. Initialize IRVisitor, which now creates the module internally using the global context
+		// 1. Initialize IRVisitor
 		IRVisitor visitor = new IRVisitor(semanticAnalyzer);
 
 		// 2. Run the visitor to populate the module

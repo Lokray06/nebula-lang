@@ -1,10 +1,11 @@
-// File: src/main/java/org/lokray/semantic/SemanticAnalyzer.java
 package org.lokray.semantic;
 
 import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.semantic.symbol.*;
-import org.lokray.semantic.type.*;
+import org.lokray.semantic.type.PrimitiveType;
+import org.lokray.semantic.type.Type;
+import org.lokray.semantic.type.UnresolvedType;
 import org.lokray.util.BuiltInTypeLoader;
 import org.lokray.util.Debug;
 import org.lokray.util.ErrorHandler;
@@ -24,59 +25,67 @@ public class SemanticAnalyzer
 	public final Map<ParseTree, Object> resolvedInfo = new HashMap<>();
 	private final ErrorHandler errorHandler;
 
-	public SemanticAnalyzer(Path ndkLib, ErrorHandler errorHandler)
+	/**
+	 * Creates a new SemanticAnalyzer, loading all specified libraries.
+	 *
+	 * @param libraryFiles       A list of specific .neblib files to load.
+	 * @param librarySearchPaths A list of directories to search for .neblib files (Not yet implemented).
+	 * @param errorHandler       The error handler instance.
+	 */
+	public SemanticAnalyzer(List<Path> libraryFiles, List<Path> librarySearchPaths, ErrorHandler errorHandler)
 	{
 		this.errorHandler = errorHandler;
 		// Define all primitive types first
 		BuiltInTypeLoader.definePrimitives(globalScope);
 
-		// Preload NDK library symbols into the global scope and declaredClasses map
-		if (ndkLib != null && Files.exists(ndkLib))
+		// TODO: Add logic to scan librarySearchPaths for .neblib files
+
+		// Preload all specified library symbols into the global scope
+		for (Path libFile : libraryFiles)
 		{
-			try
+			if (libFile != null && Files.exists(libFile))
 			{
-				NebulaLibLoader.loadLibrary(ndkLib, globalScope, declaredClasses);
-				// After loading, ensure all NDK types are properly linked
-				linkNdkSymbols();
-				linkIntrinsicsToNdkStructs();
-
-				// Automatically import all classes from 'nebula.core.*' into the global scope.
-				for (Map.Entry<String, ClassSymbol> entry : declaredClasses.entrySet())
+				try
 				{
-					String fqn = entry.getKey();
-					if (fqn.startsWith("nebula.core."))
-					{
-						// FIX: Use the last dot to find the simple class name,
-						// which correctly handles classes in sub-packages (e.g., nebula.core.io.Console -> Console).
-						int lastDotIndex = fqn.lastIndexOf('.');
-						// The simple name is the substring after the last dot.
-						String simpleName = fqn.substring(lastDotIndex + 1);
-
-						// 2. Define an AliasSymbol in the global scope for the simple name pointing to the ClassSymbol.
-						ClassSymbol classSymbol = entry.getValue();
-						globalScope.define(new AliasSymbol(simpleName, classSymbol));
-					}
+					NebulaLibLoader.loadLibrary(libFile, globalScope, declaredClasses);
 				}
-
-				// Handle the special lowercase 'string' alias separately as intended
-				if (declaredClasses.containsKey("nebula.core.String"))
+				catch (Exception e)
 				{
-					Symbol stringSymbol = declaredClasses.get("nebula.core.String");
-					globalScope.define(new AliasSymbol("string", stringSymbol));
+					Debug.logWarning("Failed to load library: " + libFile.getFileName() + " | Reason: " + e.getMessage());
+					e.printStackTrace();
 				}
-
 			}
-			catch (Exception e)
+		}
+
+		// After loading all libs, link symbols
+		linkNdkSymbols(); // Renamed, but does the same thing
+		linkIntrinsicsToNdkStructs();
+
+		// Automatically import all classes from 'nebula.core.*' into the global scope.
+		for (Map.Entry<String, ClassSymbol> entry : declaredClasses.entrySet())
+		{
+			String fqn = entry.getKey();
+			if (fqn.startsWith("nebula.core."))
 			{
-				Debug.logWarning("Failed to load ndk library: " + e.getMessage());
-				e.printStackTrace(); // Uncomment for debugging
+				int lastDotIndex = fqn.lastIndexOf('.');
+				String simpleName = fqn.substring(lastDotIndex + 1);
+
+				ClassSymbol classSymbol = entry.getValue();
+				globalScope.define(new AliasSymbol(simpleName, classSymbol));
 			}
+		}
+
+		// Handle the special lowercase 'string' alias
+		if (declaredClasses.containsKey("nebula.core.String"))
+		{
+			Symbol stringSymbol = declaredClasses.get("nebula.core.String");
+			globalScope.define(new AliasSymbol("string", stringSymbol));
 		}
 	}
 
 	public SemanticAnalyzer(ErrorHandler errorHandler)
 	{
-		this(null, errorHandler);
+		this(new ArrayList<>(), new ArrayList<>(), errorHandler);
 	}
 
 	public boolean analyze(ParseTree tree)
@@ -127,7 +136,7 @@ public class SemanticAnalyzer
 				continue;
 			}
 
-			// Link Field Types (This part is already correct as VariableSymbol hasn't changed its core Type logic)
+			// Link Field Types
 			cs.getSymbols().values().stream()
 					.filter(sym -> sym instanceof VariableSymbol)
 					.map(sym -> (VariableSymbol) sym)
@@ -144,20 +153,17 @@ public class SemanticAnalyzer
 			{
 				for (MethodSymbol ms : overloads)
 				{
-					// 1. Link return type (This is correct)
+					// 1. Link return type
 					if (ms.getType() instanceof UnresolvedType)
 					{
 						ms.setReturnType(resolveTypeByName(ms.getType().getName()));
 					}
 
-					// 2. Link parameter types (NEW LOGIC)
-					// Iterate through the ParameterSymbol list and update the Type object within each symbol.
+					// 2. Link parameter types
 					for (ParameterSymbol ps : ms.getParameters())
 					{
 						if (ps.getType() instanceof UnresolvedType)
 						{
-							// ParameterSymbol inherits setType from VariableSymbol,
-							// which is used to update the Type.
 							ps.setType(resolveTypeByName(ps.getType().getName()));
 						}
 					}
@@ -177,14 +183,25 @@ public class SemanticAnalyzer
 		{
 			return declaredClasses.get(name).getType();
 		}
-		for (String fqn : declaredClasses.keySet())
+		String fqn = findFqnForSimpleName(name);
+		if (fqn != null)
 		{
-			if (fqn.endsWith("." + name))
-			{
-				return declaredClasses.get(fqn).getType();
-			}
+			return declaredClasses.get(fqn).getType();
 		}
 		return new UnresolvedType(name);
+	}
+
+	private String findFqnForSimpleName(String simpleName)
+	{
+		// This logic might be imperfect if multiple namespaces have same class name
+		for (String fqn : declaredClasses.keySet())
+		{
+			if (fqn.endsWith("." + simpleName))
+			{
+				return fqn;
+			}
+		}
+		return null;
 	}
 
 	private void linkIntrinsicsToNdkStructs()
@@ -197,7 +214,7 @@ public class SemanticAnalyzer
 				Map.entry("char", "Char"),
 
 				// Integers
-				Map.entry("byte", "Int8"),
+				Map.entry("sbyte", "Int8"), // Renamed from byte
 				Map.entry("short", "Int16"),
 				Map.entry("int", "Int32"),
 				Map.entry("long", "Int64"),
@@ -207,7 +224,7 @@ public class SemanticAnalyzer
 				Map.entry("int64", "Int64"),
 
 				//Unsigned integers
-				Map.entry("ubyte", "UInt8"),
+				Map.entry("byte", "UInt8"), // Renamed from ubyte
 				Map.entry("ushort", "UInt16"),
 				Map.entry("uint", "UInt32"),
 				Map.entry("ulong", "UInt64"),
