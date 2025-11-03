@@ -37,14 +37,16 @@ aliasDeclaration
     : ALIAS_KW ID EQUALS_SYM qualifiedName SEMI_SYM
     ;
 
-qualifiedName : ID (DOT_SYM ID)* ;
+qualifiedName
+    : ID typeArgumentList? (DOT_SYM ID typeArgumentList?)*
+    ;
 
 // ====================================================================
 // TYPES (CLASS / STRUCT)
 // ====================================================================
 
 typeDeclaration
-    : (NATIVE_KW)? modifiers? (CLASS_KW | STRUCT_KW) ID
+    : (NATIVE_KW)? modifiers? (CLASS_KW | STRUCT_KW) ID typeParameterList?
       (L_CURLY_SYM typeMember* R_CURLY_SYM | SEMI_SYM)
     ;
 
@@ -143,6 +145,21 @@ primitiveType
 parameterList : parameter (COMMA_SYM parameter)* ;
 
 parameter : type ID (EQUALS_SYM expression)? ;
+
+// ====================================================================
+// GENERICS - TYPE PARAMETERS (FOR DECLARATIONS)
+// ====================================================================
+
+// Rule for the entire generic type parameter list, e.g., <T, U>
+typeParameterList
+    : LESS_THAN_SYM typeParameter (COMMA_SYM typeParameter)* GREATER_THAN_SYM
+    ;
+
+// Rule for a single type parameter, which is typically just an ID (the type variable name)
+// You might add constraints here later, e.g., T : SomeConstraint
+typeParameter
+    : ID
+    ;
 
 // ====================================================================
 // STATEMENTS
@@ -308,6 +325,15 @@ primary
 argumentList
     : expression (COMMA_SYM expression)* (COMMA_SYM namedArgument (COMMA_SYM namedArgument)*)?
     | namedArgument (COMMA_SYM namedArgument)*
+    ;
+
+// ====================================================================
+// GENERICS - TYPE ARGUMENTS (FOR USAGE)
+// ====================================================================
+
+// Rule for the entire generic type argument list, e.g., <int, string>
+typeArgumentList
+    : LESS_THAN_SYM type (COMMA_SYM type)* GREATER_THAN_SYM
     ;
 
 namedArgument : ID COLON_SYM expression ;

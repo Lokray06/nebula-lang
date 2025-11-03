@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import static org.lokray.util.ProcessUtils.executeCommand;
 
@@ -150,7 +149,7 @@ public class Main
 		// For now, we'll collect all .neb files passed as arguments.
 		List<Path> nebulaFiles = args.getInputFiles().stream()
 				.filter(p -> p.toString().endsWith(".neb"))
-				.collect(Collectors.toList());
+				.toList();
 
 		if (nebulaFiles.isEmpty())
 		{
