@@ -56,12 +56,26 @@ public class SemanticAnalyzer
 				}
 			}
 		}
+	}
 
-		// After loading all libs, link symbols
-		linkNdkSymbols(); // Renamed, but does the same thing
+	/**
+	 * Links core types and sets up aliases.
+	 * This MUST be called after Pass 1 (Discovery) and before Pass 3 (Type Check).
+	 */
+	public void finalizeSymbolTable()
+	{
+		linkNdkSymbols();
 		linkIntrinsicsToNdkStructs();
+		autoImportNebulaCore(globalScope);
+	}
 
-		// Automatically import all classes from 'nebula.core.*' into the global scope.
+	/**
+	 * Public method for auto-importing.
+	 * (This logic was moved from the constructor)
+	 */
+	public void autoImportNebulaCore(Scope scope)
+	{
+		// Automatically import all classes from 'nebula.core.*' into the given scope.
 		for (Map.Entry<String, ClassSymbol> entry : declaredClasses.entrySet())
 		{
 			String fqn = entry.getKey();
@@ -71,7 +85,7 @@ public class SemanticAnalyzer
 				String simpleName = fqn.substring(lastDotIndex + 1);
 
 				ClassSymbol classSymbol = entry.getValue();
-				globalScope.define(new AliasSymbol(simpleName, classSymbol));
+				scope.define(new AliasSymbol(simpleName, classSymbol));
 			}
 		}
 
@@ -79,49 +93,80 @@ public class SemanticAnalyzer
 		if (declaredClasses.containsKey("nebula.core.String"))
 		{
 			Symbol stringSymbol = declaredClasses.get("nebula.core.String");
-			globalScope.define(new AliasSymbol("string", stringSymbol));
+			scope.define(new AliasSymbol("string", stringSymbol));
 		}
 	}
 
-	public SemanticAnalyzer(ErrorHandler errorHandler)
+	/**
+	 * Multi-file analysis entry point.
+	 * Performs discovery, member definition, type checking, and finalization
+	 * across *all* parse trees (library or executable).
+	 */
+	public boolean analyze(List<ParseTree> trees)
 	{
-		this(new ArrayList<>(), new ArrayList<>(), errorHandler);
-	}
+		Debug.logDebug("Starting semantic analysis across " + trees.size() + " file(s)...");
 
-	public boolean analyze(ParseTree tree)
-	{
-		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members
-		// This must be done in two passes, just like the library build.
-
-		// Pass 1: Discover all types in this tree
-		Debug.logDebug("\nSymbol resolution (Pass 1: Discovery)...");
+		// --- PASS 1: Type discovery ---
+		Debug.logDebug("PASS 1: Discovering types...");
 		SymbolTableBuilder discoveryVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, true);
-		discoveryVisitor.visit(tree);
-
-		this.hasErrors = discoveryVisitor.hasErrors();
-		if (hasErrors)
+		for (ParseTree t : trees)
 		{
+			discoveryVisitor.visit(t);
+		}
+
+		// Define string alias if available
+		if (declaredClasses.containsKey("nebula.core.String"))
+		{
+			globalScope.define(new AliasSymbol("string", declaredClasses.get("nebula.core.String")));
+		}
+
+		if (errorHandler.hasErrors())
+		{
+			Debug.logError("Errors encountered during discovery pass.");
 			return false;
 		}
 
-		// Pass 2: Define members
-		Debug.logDebug("\nSymbol resolution (Pass 2: Member Definition)...");
+		// --- PASS 2: Define members ---
+		Debug.logDebug("PASS 2: Defining members...");
 		SymbolTableBuilder memberVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
-		memberVisitor.visit(tree);
-
-		this.hasErrors = memberVisitor.hasErrors();
-		if (hasErrors)
+		for (ParseTree t : trees)
 		{
+			memberVisitor.visit(t);
+		}
+
+		if (errorHandler.hasErrors())
+		{
+			Debug.logError("Errors encountered during member definition pass.");
 			return false;
 		}
 
-		// Pass 3: Type Checking and Resolution for method bodies and initializers
-		Debug.logDebug("\nType checking...");
-		TypeCheckVisitor refVisitor = new TypeCheckVisitor(globalScope, declaredClasses, resolvedSymbols, resolvedTypes, resolvedInfo, errorHandler); // Pass resolvedInfo map
-		refVisitor.visit(tree);
-		this.hasErrors = refVisitor.hasErrors();
+		// --- Finalize symbol table (core imports, aliases, etc.) ---
+		finalizeSymbolTable();
 
-		return !hasErrors;
+		// --- PASS 3: Type checking ---
+		Debug.logDebug("PASS 3: Type checking...");
+		TypeCheckVisitor typeChecker = new TypeCheckVisitor(
+				globalScope,
+				declaredClasses,
+				resolvedSymbols,
+				resolvedTypes,
+				resolvedInfo,
+				errorHandler
+		);
+
+		for (ParseTree t : trees)
+		{
+			typeChecker.visit(t);
+		}
+
+		if (typeChecker.hasErrors() || errorHandler.hasErrors())
+		{
+			Debug.logError("Errors encountered during type checking.");
+			return false;
+		}
+
+		Debug.logDebug("Semantic analysis completed successfully across all files.");
+		return true;
 	}
 
 	private void linkNdkSymbols()

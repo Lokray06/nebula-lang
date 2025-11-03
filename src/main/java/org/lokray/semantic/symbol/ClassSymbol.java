@@ -17,6 +17,7 @@ public class ClassSymbol extends Scope implements Symbol
 	private final Map<String, List<MethodSymbol>> methodsByMangledName = new HashMap<>();
 	private ClassSymbol superClass; // Added superclass field
 	private final List<TypeParameterSymbol> typeParameters = new ArrayList<>();
+	private final Scope enclosingScope;
 
 	// Modifiers
 	private final boolean isNative;
@@ -25,6 +26,7 @@ public class ClassSymbol extends Scope implements Symbol
 	public ClassSymbol(String name, Scope enclosingScope, boolean isNative, boolean isPublic)
 	{
 		super(enclosingScope);
+		this.enclosingScope = enclosingScope;
 		this.name = name;
 		this.type = new ClassType(this);
 		this.isNative = isNative;
@@ -432,4 +434,24 @@ public class ClassSymbol extends Scope implements Symbol
 		Debug.logDebug("--- Overload Result: AMBIGUOUS (Phases 3 & 4 failed to find single match) ---");
 		return null; // Ambiguous call
 	}
+
+	public String getFqn()
+	{
+		// If the enclosing scope is another ClassSymbol, include it.
+		if (enclosingScope instanceof ClassSymbol parentClass)
+		{
+			String parentFqn = parentClass.getFqn();
+			return parentFqn.isEmpty() ? name : parentFqn + "." + name;
+		}
+		// If it's inside a NamespaceSymbol, use that FQN.
+		else if (enclosingScope instanceof NamespaceSymbol parentNamespace)
+		{
+			String parentFqn = parentNamespace.getFqn();
+			return parentFqn.isEmpty() ? name : parentFqn + "." + name;
+		}
+
+		// Top-level class
+		return name;
+	}
+
 }

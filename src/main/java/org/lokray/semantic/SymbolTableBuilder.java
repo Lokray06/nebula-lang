@@ -42,6 +42,36 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 	}
 
 	/**
+	 * Compute the fully qualified name (FQN) for a type declaration
+	 * based on the current scope chain (namespaces and enclosing classes).
+	 */
+	private String getFqn(NebulaParser.TypeDeclarationContext ctx)
+	{
+		String simpleName = ctx.ID().getText();
+
+		Scope scopeCheck = currentScope;
+
+		// Walk up through namespaces/classes until reaching the root.
+		while (scopeCheck != null)
+		{
+			if (scopeCheck instanceof NamespaceSymbol ns)
+			{
+				String nsFqn = ns.getFqn();
+				return nsFqn.isEmpty() ? simpleName : nsFqn + "." + simpleName;
+			}
+			else if (scopeCheck instanceof ClassSymbol cs)
+			{
+				String classFqn = cs.getFqn();
+				return classFqn + "." + simpleName;
+			}
+			scopeCheck = scopeCheck.getEnclosingScope();
+		}
+
+		// No namespace/class → top-level type
+		return simpleName;
+	}
+
+	/**
 	 * Resolve a Type from the parser TypeContext.
 	 * Updated to use tupleElement (the renamed rule).
 	 */
@@ -101,41 +131,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			baseType = new ArrayType(baseType);
 		}
 		return baseType;
-	}
-
-	@Override
-	public Void visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
-	{
-		if (discoveryOnly)
-		{
-			return null; // Skip imports in the first pass
-		}
-		String fqn = getFqn(ctx.qualifiedName());
-		String[] parts = fqn.split("\\.");
-		String simpleName = parts[parts.length - 1];
-
-		Symbol targetSymbol = declaredClasses.get(fqn);
-
-		if (targetSymbol == null)
-		{
-			Optional<Symbol> resolved = root.resolvePath(fqn);
-			if (resolved.isEmpty())
-			{
-				errorHandler.logError(ctx.qualifiedName().start, "Cannot find type to import: '" + fqn + "'.", currentClass);
-				return null;
-			}
-			targetSymbol = resolved.get();
-		}
-
-		if (currentScope.resolveLocally(simpleName).isPresent())
-		{
-			errorHandler.logError(ctx.qualifiedName().start, "A symbol named '" + simpleName + "' is already defined or imported in this scope.", currentClass);
-			return null;
-		}
-
-		currentScope.define(new AliasSymbol(simpleName, targetSymbol));
-		Debug.logDebug("  Created import alias: " + simpleName + " -> " + fqn);
-		return null;
 	}
 
 	@Override
@@ -222,19 +217,19 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 
 			if (isClass)
 			{
-				ClassSymbol cs = new ClassSymbol(typeName, currentScope, isNative, isPublic);
-				String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-				String fqn = namespacePrefix.isEmpty() ? typeName : namespacePrefix + "." + typeName;
-				declaredClasses.put(fqn, cs);
-				currentScope.define(cs);
-				Debug.logDebug("Defined " + (isNative ? "native " : "") + "class " + cs.getName());
-				newTypeSymbol = cs;
+				ClassSymbol classSymbol = new ClassSymbol(typeName, currentScope, isNative, isPublic);
+				String fqn = getFqn(ctx);
+				Debug.logWarning("Resolved FQN for type '" + typeName + "' -> " + fqn);
+				declaredClasses.put(fqn, classSymbol);
+				currentScope.define(classSymbol);
+				Debug.logDebug("Defined " + (isNative ? "native " : "") + "class " + classSymbol.getName());
+				newTypeSymbol = classSymbol;
 			}
 			else // struct
 			{
 				StructSymbol structSymbol = new StructSymbol(typeName, currentScope, isPublic, isNative);
-				String namespacePrefix = (currentScope instanceof NamespaceSymbol) ? ((NamespaceSymbol) currentScope).getFqn() : "";
-				String fqn = namespacePrefix.isEmpty() ? typeName : namespacePrefix + "." + typeName;
+				String fqn = getFqn(ctx);
+				Debug.logWarning("Resolved FQN for type '" + typeName + "' -> " + fqn);
 				declaredClasses.put(fqn, structSymbol);
 				currentScope.define(structSymbol);
 				Debug.logDebug("Defined " + (isNative ? "native " : "") + "struct " + structSymbol.getName());

@@ -281,39 +281,98 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return null;
 	}
 
+	/**
+	 * Handle import statements during type-checking pass.
+	 */
+	@Override
+	public Type visitImportDeclaration(NebulaParser.ImportDeclarationContext ctx)
+	{
+		String fqn = getFqn(ctx.qualifiedName());
+		String[] parts = fqn.split("\\.");
+		String simpleName = parts[parts.length - 1];
+
+		// Resolve against the *global* map of all known classes
+		Symbol targetSymbol = declaredClasses.get(fqn);
+
+		if (targetSymbol == null)
+		{
+			// Fallback for full namespace imports (if ever supported) or errors
+			Optional<Symbol> resolved = globalScope.resolvePath(fqn);
+			if (resolved.isEmpty())
+			{
+				logError(ctx.qualifiedName().start, "Cannot find type to import: '" + fqn + "'.");
+				return null;
+			}
+			targetSymbol = resolved.get();
+		}
+
+		if (currentScope.resolveLocally(simpleName).isPresent())
+		{
+			// Note: This check might be too strict if two files in the same namespace import different things.
+			// For now, it matches the SymbolTableBuilder's original logic.
+			logError(ctx.qualifiedName().start, "A symbol named '" + simpleName + "' is already defined or imported in this scope.");
+			return null;
+		}
+
+		// Define the alias in the *current* scope (e.g., inside the namespace)
+		currentScope.define(new AliasSymbol(simpleName, targetSymbol));
+		Debug.logDebug("  (TypeCheck) Created import alias: " + simpleName + " -> " + fqn);
+		return null;
+	}
+
 	// --- Scope Management ---
 	@Override
 	public Type visitNamespaceDeclaration(NebulaParser.NamespaceDeclarationContext ctx)
 	{
 		String nsName = getFqn(ctx.qualifiedName());
-		currentScope = (Scope) currentScope.resolve(nsName).orElse(currentScope);
+
+		// ✅ Correctly resolve nested namespaces using resolvePath()
+		Optional<Symbol> resolved = currentScope.resolvePath(nsName);
+
+		if (resolved.isEmpty() || !(resolved.get() instanceof NamespaceSymbol ns))
+		{
+			logError(ctx.start, "Internal error: Namespace '" + nsName + "' not found during type checking.");
+			return null;
+		}
+
+		Scope oldScope = currentScope;
+		currentScope = ns;
+
+		// Visit nested declarations (classes, structs, etc.)
 		visitChildren(ctx);
-		currentScope = currentScope.getEnclosingScope();
+
+		currentScope = oldScope;
 		return null;
 	}
+
 
 	@Override
 	public Type visitTypeDeclaration(NebulaParser.TypeDeclarationContext ctx)
 	{
-		boolean isClass = ctx.CLASS_KW() != null;
-		boolean isStruct = ctx.STRUCT_KW() != null;
-		boolean isNative = ctx.NATIVE_KW() != null;
+		String fqn = getFqn(ctx);
 
-		// Pick the correct symbol type (ClassSymbol or StructSymbol)
-		String name = ctx.ID().getText();
-		ClassSymbol typeSymbol = (ClassSymbol) currentScope.resolveLocally(name).orElse(null);
-		if (typeSymbol == null)
+		// Look up directly in the global map
+		ClassSymbol classSymbol = declaredClasses.get(fqn);
+
+		if (classSymbol == null)
 		{
-			logError(ctx.start, "Internal error: Type symbol '" + name + "' not found.");
+			// 🚀 FIXING THE ERROR MESSAGE: Print the correct type name, not ctx.getText()
+			logError(ctx.start, "Internal error: Type symbol '" + ctx.ID().getText() +
+					"' not found in declared classes map. FQN attempted: " + fqn);
 			return null;
 		}
+
+		// Note the resolved symbol on the context (used by IR generation)
+		note(ctx, classSymbol);
 
 		// Backup context
 		ClassSymbol oldClass = currentClass;
 		Scope oldScope = currentScope;
 
-		currentClass = typeSymbol;
-		currentScope = typeSymbol;
+		// Set currentClass and currentScope for member visit.
+		// The previous code was missing this, which is required for members to resolve types.
+		currentClass = classSymbol;
+		currentScope = classSymbol;
 
 		// Visit all members
 		visitChildren(ctx);
@@ -322,7 +381,8 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		currentScope = oldScope;
 		currentClass = oldClass;
 
-		return null;
+		// 🚀 Ensure the method returns the type, not null.
+		return classSymbol.getType();
 	}
 
 	@Override
@@ -3083,4 +3143,37 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		// It's a concrete type (int, string, etc.), no substitution needed.
 		return type;
 	}
+
+	/**
+	 * Computes the Fully Qualified Name (FQN) for a type declaration
+	 * (class or struct) based on the current scope chain.
+	 */
+	private String getFqn(NebulaParser.TypeDeclarationContext ctx)
+	{
+		String simpleName = ctx.ID().getText();
+
+		Scope scopeCheck = currentScope;
+
+		// Climb up through scopes until you hit a namespace or null.
+		while (scopeCheck != null)
+		{
+			if (scopeCheck instanceof NamespaceSymbol ns)
+			{
+				// Namespace knows its own FQN.
+				String nsFqn = ns.getFqn();
+				return nsFqn.isEmpty() ? simpleName : nsFqn + "." + simpleName;
+			}
+			else if (scopeCheck instanceof ClassSymbol cls)
+			{
+				// Handle nested class case.
+				String classFqn = cls.getFqn();
+				return classFqn + "." + simpleName;
+			}
+			scopeCheck = scopeCheck.getEnclosingScope();
+		}
+
+		// Fallback: top-level type (global scope)
+		return simpleName;
+	}
+
 }

@@ -8,6 +8,7 @@ import org.lokray.parser.NebulaParserBaseVisitor;
 import org.lokray.semantic.SemanticAnalyzer;
 import org.lokray.semantic.info.SimplifiedForInfo;
 import org.lokray.semantic.info.TraditionalForInfo;
+import org.lokray.semantic.symbol.ClassSymbol;
 import org.lokray.semantic.symbol.MethodSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
@@ -42,11 +43,8 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	public IRVisitor(SemanticAnalyzer semanticAnalyzer)
 	{
 		this.semanticAnalyzer = semanticAnalyzer;
-
-		// Initialize builder and module using the global context
 		this.builder = LLVMCreateBuilder();
 		this.module = LLVMModuleCreateWithName("nebula_module");
-
 		scopedValues.push(new HashMap<>());
 	}
 
@@ -62,7 +60,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 
 		String methodName;
-
 		if (methodSymbol.isMainMethod())
 		{
 			methodName = methodSymbol.getName();
@@ -73,27 +70,56 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 		Debug.logDebug("IR: Defining function: " + methodName);
 
-		// 2. Create or get the function prototype
+		// 2. Create or get the function prototype (include 'this' for instance methods)
 		LLVMValueRef function = LLVMGetNamedFunction(module, methodName);
 		if (function == null)
 		{
 			List<Type> paramTypes = methodSymbol.getParameterTypes();
-			LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
-			for (int i = 0; i < paramTypes.size(); i++)
+			List<LLVMTypeRef> llvmParamTypeList = new ArrayList<>();
+
+			// Add 'this' as first parameter if instance method
+			if (!methodSymbol.isStatic())
 			{
-				llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i));
+				Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+				LLVMTypeRef thisLLVMType = TypeConverter.toLLVMType(thisType);
+				llvmParamTypeList.add(thisLLVMType);
 			}
 
+			// Add remaining parameters
+			for (Type paramType : paramTypes)
+			{
+				llvmParamTypeList.add(TypeConverter.toLLVMType(paramType));
+			}
+
+			LLVMTypeRef[] llvmParamTypes = llvmParamTypeList.toArray(new LLVMTypeRef[0]);
 			LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType());
-			LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
+			LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), llvmParamTypeList.size(), 0);
 			function = LLVMAddFunction(module, methodName, functionType);
+
+			// If this method is native, make sure it's an external declaration (no body).
+			if (methodSymbol.isNative())
+			{
+				// Mark as external linkage so it remains a declaration.
+				LLVMSetLinkage(function, LLVMExternalLinkage);
+				Debug.logDebug("IR: Created external declaration for native method: " + methodName);
+				return function;
+			}
+		}
+		else
+		{
+			// If the function already exists but the symbol is native, ensure it's external (no body).
+			if (methodSymbol.isNative())
+			{
+				LLVMSetLinkage(function, LLVMExternalLinkage);
+				Debug.logDebug("IR: Found existing function and ensured external linkage for native: " + methodName);
+				return function;
+			}
 		}
 
-		// 3. Mark main method (no special behavior, just identification)
+		// 3. Mark main method
 		if (methodSymbol.isMainMethod())
 		{
 			Debug.logDebug("IR: Marking as main method: " + methodName);
-			// Optional: could store function reference externally if needed
 		}
 
 		// 4. Create entry block and position builder
@@ -106,25 +132,48 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);
 		namedValues.clear();
 
-		// 6. Process parameters
-		PointerPointer<LLVMValueRef> params = new PointerPointer<>(methodSymbol.getParameterTypes().size());
+		// NEW: Create a new scope for parameters + 'this'
+		pushScope();
+
+		// 6. Process parameters (handle 'this' offset)
+		int totalParams = methodSymbol.getParameterTypes().size() + (methodSymbol.isStatic() ? 0 : 1);
+		PointerPointer<LLVMValueRef> params = new PointerPointer<>(totalParams);
 		LLVMGetParams(function, params);
+
+		int paramOffset = 0;
+		if (!methodSymbol.isStatic())
+		{
+			LLVMValueRef thisPtr = params.get(LLVMValueRef.class, 0);
+			Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+			LLVMTypeRef thisLLVMType = TypeConverter.toLLVMType(thisType);
+
+			LLVMSetValueName2(thisPtr, new BytePointer("this.ptr"), 8);
+			LLVMValueRef thisAlloca = createEntryBlockAlloca(function, thisLLVMType, "this");
+			LLVMBuildStore(builder, thisPtr, thisAlloca);
+			namedValues.put("this", thisAlloca);
+			addVariableToScope("this", thisAlloca);
+			paramOffset = 1;
+		}
 
 		for (int i = 0; i < methodSymbol.getParameterTypes().size(); i++)
 		{
 			Type paramNebulaType = methodSymbol.getParameterTypes().get(i);
 			String paramName = methodSymbol.getParameters().get(i).getName();
 			LLVMTypeRef paramLLVMType = TypeConverter.toLLVMType(paramNebulaType);
-			LLVMValueRef incomingValue = params.get(LLVMValueRef.class, i);
+			LLVMValueRef incomingValue = params.get(LLVMValueRef.class, i + paramOffset);
 
+			LLVMSetValueName2(incomingValue, new BytePointer(paramName + ".ptr"), paramName.length() + 4);
 			LLVMValueRef alloca = createEntryBlockAlloca(function, paramLLVMType, paramName);
 			LLVMBuildStore(builder, incomingValue, alloca);
 			namedValues.put(paramName, alloca);
 			addVariableToScope(paramName, alloca);
 		}
 
-		// 7. Visit the method body
-		visit(ctx.block());
+		// 7. Visit the method body if present (non-native methods)
+		if (ctx.block() != null)
+		{
+			visit(ctx.block());
+		}
 
 		// 8. Add implicit return if needed
 		LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(function);
@@ -135,19 +184,26 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			{
 				LLVMBuildRetVoid(builder);
 			}
+			else if (methodSymbol.isMainMethod())
+			{
+				LLVMBuildRet(builder, LLVMConstInt(TypeConverter.toLLVMType(returnType), 0, 0));
+			}
 			else
 			{
-				// Optionally add default return for non-void types if language allows fall-through
-				// e.g., LLVMBuildRet(builder, LLVMConstNull(TypeConverter.toLLVMType(returnType)));
+				Debug.logWarning("IR: Non-void method " + methodName + " missing return. Building unreachable.");
+				LLVMBuildUnreachable(builder);
 			}
 		}
 
 		// 9. Restore previous context
+		popScope();
+		namedValues.clear();
 		namedValues.putAll(outerValues);
 		currentFunction = oldFunction;
 
 		return function;
 	}
+
 
 	@Override
 	public LLVMValueRef visitPowerExpression(NebulaParser.PowerExpressionContext ctx)
@@ -1207,10 +1263,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		return null;
 	}
 
-	/**
-	 * Handles expressions that are method calls (e.g., getPi()) or variable
-	 * lookups (e.g., fPi).
-	 */
 	@Override
 	public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
 	{
@@ -1218,11 +1270,124 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				" (Hash: " + ctx.hashCode() +
 				", Interval: " + ctx.getSourceInterval() + ")");
 
-
 		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 		Optional<Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx); // Get the final type
 
-		// Handle Array Element Access arr[idx]
+		// ---------- METHOD CALL (instance or static) ----------
+		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
+		{
+			Debug.logDebug("IR (Postfix): Resolved as method call: " + methodSymbol);
+
+			String mangledName = methodSymbol.getMangledName();
+			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
+
+			// --- 1. Build function parameter type list (include 'this' for instance methods) ---
+			List<Type> paramTypes = methodSymbol.getParameterTypes();
+			List<LLVMTypeRef> llvmParamTypesList = new ArrayList<>();
+
+			if (!methodSymbol.isStatic())
+			{
+				// 'this' pointer type (pointer to class/struct)
+				Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+				llvmParamTypesList.add(TypeConverter.toLLVMType(thisType));
+			}
+
+			for (Type p : paramTypes)
+			{
+				llvmParamTypesList.add(TypeConverter.toLLVMType(p));
+			}
+
+			LLVMTypeRef[] llvmParamTypes = llvmParamTypesList.toArray(new LLVMTypeRef[0]);
+			LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType());
+			LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), llvmParamTypesList.size(), 0);
+
+			// --- 2. Create function prototype if missing ---
+			if (function == null)
+			{
+				Debug.logDebug("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
+				function = LLVMAddFunction(module, mangledName, functionType);
+			}
+
+			// If method is native, ensure external linkage (so we don't emit a body later).
+			if (methodSymbol.isNative())
+			{
+				LLVMSetLinkage(function, LLVMExternalLinkage);
+				Debug.logDebug("IR (Postfix): Ensured external linkage for native method: " + mangledName);
+			}
+
+			// --- 3. Prepare args list (compute 'this' first for instance methods) ---
+			List<LLVMValueRef> args = new ArrayList<>();
+
+			int argOffset = 0;
+			if (!methodSymbol.isStatic())
+			{
+				// The 'this' object is the result of visiting the 'primary' part
+				// (e.g., in `obj.foo()` the primary is `obj`)
+				LLVMValueRef thisObject = visit(ctx.primary());
+				if (thisObject == null)
+				{
+					Debug.logError("IR Error: Failed to generate 'this' for instance method call: " + ctx.getText());
+					return null;
+				}
+
+				LLVMTypeRef expectedThisType = llvmParamTypesList.get(0);
+				thisObject = buildCast(builder, thisObject, expectedThisType, "this_cast");
+				args.add(thisObject);
+				argOffset = 1;
+			}
+
+			// Locate argument list child if present
+			NebulaParser.ArgumentListContext argListCtx = null;
+			for (int i = 0; i < ctx.getChildCount(); i++)
+			{
+				if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
+				{
+					argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
+					break;
+				}
+			}
+
+			List<Type> expectedParamTypes = methodSymbol.getParameterTypes();
+			if (argListCtx != null)
+			{
+				Debug.logDebug("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
+				for (int i = 0; i < argListCtx.expression().size(); i++)
+				{
+					NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
+					Debug.logDebug("IR (Postfix): Visiting argument #" + i + ": " + exprCtx.getText() +
+							" (Hash: " + exprCtx.hashCode() +
+							", Interval: " + exprCtx.getSourceInterval() + ")");
+					LLVMValueRef argValue = visit(exprCtx);
+
+					// Argument Type Conversion: account for 'this' offset in param index
+					int paramIdx = i + (methodSymbol.isStatic() ? 0 : 1);
+					if (paramIdx < llvmParamTypesList.size() && argValue != null)
+					{
+						LLVMTypeRef targetType = llvmParamTypesList.get(paramIdx);
+						argValue = buildCast(builder, argValue, targetType, "arg_cast" + i);
+					}
+					args.add(argValue);
+				}
+			}
+
+			// --- 4. Build call ---
+			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
+			for (int i = 0; i < args.size(); i++)
+			{
+				argsPtr.put(i, args.get(i));
+			}
+
+			Debug.logDebug("IR (Postfix): Building LLVM call instruction for: " + mangledName);
+			String callName = "";
+			if (methodSymbol.getType() != PrimitiveType.VOID)
+			{
+				callName = methodSymbol.getName() + ".call";
+			}
+
+			return LLVMBuildCall2(builder, functionType, function, argsPtr, args.size(), callName.isEmpty() ? "" : callName);
+		}
+
+		// ---------- ARRAY ELEMENT ACCESS: arr[idx] ----------
 		if (ctx.expression() != null && !ctx.expression().isEmpty() && ctx.L_BRACK_SYM().size() > 0)
 		{
 			Debug.logDebug("IR (Postfix): Detected potential array access.");
@@ -1236,7 +1401,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				return null;
 			}
 
-			// Check if the base 'arr' is indeed an array descriptor pointer (alloca result)
+			// Check if the base 'arr' is indeed an array descriptor pointer
 			LLVMTypeRef baseDescPtrType = LLVMTypeOf(baseDescPtr);
 			LLVMTypeRef arrayDescType = TypeConverter.getArrayDescStructType();
 			if (LLVMGetTypeKind(baseDescPtrType) != LLVMPointerTypeKind || !LLVMGetElementType(baseDescPtrType).equals(arrayDescType))
@@ -1245,45 +1410,37 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				return null;
 			}
 
-
-			// 2. Visit the index expression
-			LLVMValueRef indexVal = visit(ctx.expression(0)); // Assuming single index for now
+			// 2. Visit the index expression (support single index for now)
+			LLVMValueRef indexVal = visit(ctx.expression(0));
 			if (indexVal == null)
 			{
 				Debug.logError("IR Error: Failed to generate IR for array index: " + ctx.expression(0).getText());
 				return null;
 			}
-			// Ensure index is integer type (semantic analysis should guarantee this, but cast if needed)
-			indexVal = buildCast(builder, indexVal, LLVMInt32Type(), "idx_cast"); // Assume i32 index
-
+			indexVal = buildCast(builder, indexVal, LLVMInt32Type(), "idx_cast"); // assume i32 index
 
 			// 3. Load the descriptor struct
 			LLVMValueRef descStruct = LLVMBuildLoad2(builder, arrayDescType, baseDescPtr, "arr.desc.load");
 
-			// 4. Extract the data pointer (i8*) from the struct (index 0)
+			// 4. Extract the data pointer (i8*) and bounds
 			LLVMValueRef dataPtrI8 = LLVMBuildExtractValue(builder, descStruct, 0, "arr.data.ptr.i8");
+			LLVMValueRef sizeVal = LLVMBuildExtractValue(builder, descStruct, 1, "arr.size");
 
 			// Bounds Checking
-			LLVMValueRef sizeVal = LLVMBuildExtractValue(builder, descStruct, 1, "arr.size");
-			LLVMValueRef isInBounds = LLVMBuildICmp(builder, LLVMIntULT, indexVal, sizeVal, "bounds.check"); // Unsigned comparison
-
+			LLVMValueRef isInBounds = LLVMBuildICmp(builder, LLVMIntULT, indexVal, sizeVal, "bounds.check");
 			LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
 			LLVMValueRef function = LLVMGetBasicBlockParent(currentBlock);
 			LLVMBasicBlockRef thenBlock = LLVMAppendBasicBlock(function, "bounds.ok");
 			LLVMBasicBlockRef elseBlock = LLVMAppendBasicBlock(function, "bounds.err");
-
 			LLVMBuildCondBr(builder, isInBounds, thenBlock, elseBlock);
 
 			LLVMPositionBuilderAtEnd(builder, elseBlock);
-			// Call a runtime error function, print message, or trap
-			// Example: call void @runtime_error("Index out of bounds")
-			LLVMBuildUnreachable(builder); // Terminate error block
+			// Here you may call runtime_error() or print message; we'll just trap/unreachable for now
+			LLVMBuildUnreachable(builder);
 
-			LLVMPositionBuilderAtEnd(builder, thenBlock); // Continue GEP in the 'then' block
-			// End Bounds Checking
+			LLVMPositionBuilderAtEnd(builder, thenBlock);
 
-
-			// 5. Cast the i8* data pointer back to the correct element pointer type
+			// 5. Cast the i8* data pointer back to element pointer type
 			Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
 			if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType))
 			{
@@ -1294,95 +1451,14 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			LLVMTypeRef elementPtrType = LLVMPointerType(elementLLVMType, 0);
 			LLVMValueRef dataPtrTyped = LLVMBuildBitCast(builder, dataPtrI8, elementPtrType, "arr.data.ptr.typed");
 
-			// 6. Build the GEP instruction to get the element address
+			// 6. Build the GEP to element address
 			LLVMValueRef elementPtr = LLVMBuildGEP2(builder, elementLLVMType, dataPtrTyped, new PointerPointer<>(indexVal), 1, "arr.elem.ptr");
 
-			// IMPORTANT: Return the POINTER to the element.
-			// The parent expression (e.g., assignment, another operation) will handle loading/storing.
 			Debug.logDebug("IR (Postfix): Array access returning element pointer.");
 			return elementPtr;
 		}
-		// End Array Element Access
 
-		// Existing Method Call Handling
-		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
-		{
-			Debug.logDebug("IR (Postfix): Resolved as method call: " + methodSymbol);
-
-			String mangledName = methodSymbol.getMangledName();
-			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
-
-			// --- 1. Calculate Function Type (Always from Symbol) ---
-			List<Type> paramTypes = methodSymbol.getParameterTypes();
-			LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
-			for (int i = 0; i < paramTypes.size(); i++)
-			{
-				llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i));
-			}
-			LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType());
-			LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
-
-			// --- 2. Create Function Prototype if it doesn't exist ---
-			if (function == null)
-			{
-				Debug.logDebug("IR (Postfix): Function prototype not found. Creating LLVM declaration for: " + mangledName);
-				function = LLVMAddFunction(module, mangledName, functionType);
-			}
-
-			// 3. Prepare arguments
-			List<LLVMValueRef> args = new ArrayList<>();
-			List<Type> expectedParamTypes = methodSymbol.getParameterTypes();
-			NebulaParser.ArgumentListContext argListCtx = null;
-			for (int i = 0; i < ctx.getChildCount(); i++)
-			{
-				if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
-				{
-					argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
-					break;
-				}
-			}
-
-			if (argListCtx != null)
-			{
-				Debug.logDebug("IR (Postfix): Processing " + argListCtx.expression().size() + " arguments...");
-				for (int i = 0; i < argListCtx.expression().size(); i++)
-				{
-					NebulaParser.ExpressionContext exprCtx = argListCtx.expression().get(i);
-					Debug.logDebug("IR (Postfix): Visiting argument #" + i + ": " + exprCtx.getText() +
-							" (Hash: " + exprCtx.hashCode() +
-							", Interval: " + exprCtx.getSourceInterval() + ")");
-					LLVMValueRef argValue = visit(exprCtx);
-
-					// Argument Type Conversion
-					if (i < expectedParamTypes.size() && argValue != null)
-					{
-						Type targetType = expectedParamTypes.get(i);
-						argValue = buildCast(builder, argValue, TypeConverter.toLLVMType(targetType), "arg_cast" + i);
-					}
-					args.add(argValue);
-				}
-			}
-
-			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
-			for (int i = 0; i < args.size(); i++)
-			{
-				argsPtr.put(i, args.get(i));
-			}
-
-			// 4. Build the call instruction
-			Debug.logDebug("IR (Postfix): Building LLVM call instruction for: " + mangledName);
-			String callName = ""; // Default to void return
-			if (methodSymbol.getType() != PrimitiveType.VOID)
-			{
-				callName = methodSymbol.getName() + ".call"; // Name result if non-void
-			}
-
-			// NOTE: functionType is now correctly defined from the symbol in step 1.
-			return LLVMBuildCall2(builder, functionType, function, argsPtr, args.size(), callName);
-		}
-		// End Method Call Handling
-
-		// Handle Postfix Inc/Dec
+		// ---------- POSTFIX ++ / -- ----------
 		if (ctx.INC_OP().size() > 0 || ctx.DEC_OP().size() > 0)
 		{
 			LLVMValueRef baseVal = visit(ctx.primary()); // Get the L-Value (address)
@@ -1396,31 +1472,28 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			LLVMValueRef loadedVal = LLVMBuildLoad2(builder, elementType, baseVal, "postop.load");
 			LLVMValueRef resultVal; // The value *before* the operation
 			LLVMValueRef newVal;
-
 			LLVMValueRef one = LLVMConstInt(elementType, 1, 0);
 
 			if (!ctx.INC_OP().isEmpty())
 			{ // Post-increment x++
 				newVal = LLVMBuildAdd(builder, loadedVal, one, "postinc");
-				resultVal = loadedVal; // Return the original value
+				resultVal = loadedVal; // Return original value
 			}
 			else
 			{ // Post-decrement x--
 				newVal = LLVMBuildSub(builder, loadedVal, one, "postdec");
-				resultVal = loadedVal; // Return the original value
+				resultVal = loadedVal; // Return original value
 			}
 
-			LLVMBuildStore(builder, newVal, baseVal); // Store the modified value back
-			return resultVal; // Return the value *before* modification
+			LLVMBuildStore(builder, newVal, baseVal);
+			return resultVal;
 		}
-		// End Postfix Inc/Dec
 
-
-		// Fallback: Variable Access
+		// ---------- FALLBACK: variable access or primary ----------
 		Debug.logDebug("IR (Postfix): Not a method call or array access. Visiting Primary child: " + ctx.primary().getText() +
 				" (Hash: " + ctx.primary().hashCode() +
 				", Interval: " + ctx.primary().getSourceInterval() + ")");
-		return visit(ctx.primary()); // Load variable value if primary is ID
+		return visit(ctx.primary());
 	}
 
 	@Override

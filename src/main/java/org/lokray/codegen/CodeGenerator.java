@@ -9,6 +9,7 @@ import org.lokray.util.Debug;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.bytedeco.llvm.global.LLVM.*;
 
@@ -25,13 +26,13 @@ public class CodeGenerator
 		Debug.logDebug("LLVM Subsystems Initialized.");
 	}
 
-	private final ParseTree tree;
+	private final List<ParseTree> trees;
 	private final SemanticAnalyzer semanticAnalyzer;
 	private final Path outputPath;
 
-	public CodeGenerator(ParseTree tree, SemanticAnalyzer semanticAnalyzer, Path outputPath)
+	public CodeGenerator(List<ParseTree> trees, SemanticAnalyzer semanticAnalyzer, Path outputPath)
 	{
-		this.tree = tree;
+		this.trees = trees;
 		this.semanticAnalyzer = semanticAnalyzer;
 		this.outputPath = outputPath;
 	}
@@ -42,7 +43,10 @@ public class CodeGenerator
 		IRVisitor visitor = new IRVisitor(semanticAnalyzer);
 
 		// 2. Run the visitor to populate the module
-		visitor.visit(tree);
+		for (ParseTree tree : trees) // 🚀 CHANGE: Loop over all trees
+		{
+			visitor.visit(tree);
+		}
 
 		// 3. Retrieve the generated module
 		LLVMModuleRef module = visitor.getModule();

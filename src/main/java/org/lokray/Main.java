@@ -11,18 +11,12 @@ import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.SemanticAnalyzer;
-import org.lokray.semantic.SymbolTableBuilder;
-import org.lokray.semantic.symbol.AliasSymbol;
-import org.lokray.semantic.symbol.ClassSymbol;
-import org.lokray.semantic.symbol.Scope;
 import org.lokray.util.*;
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import static org.lokray.util.ProcessUtils.executeCommand;
 
@@ -85,57 +79,74 @@ public class Main
 	}
 
 	/**
-	 * Compiles the input files into a executable binary.
+	 * Compiles the input files into an executable binary.
 	 */
 	private static void buildExecutable(CompilerArguments args, ErrorHandler errorHandler) throws IOException, InterruptedException
 	{
-		// For now, we only support single-file compilation.
-		// In a project-based build, we would parse the .nebproj file here
-		// to find all source files.
-		Path inputFile = args.getInputFiles().get(0); // Use first file
-		if (!Files.exists(inputFile))
+		Debug.logDebug("\nStarting executable build...");
+
+		List<Path> nebulaFiles = args.getInputFiles().stream()
+				.filter(p -> p.toString().endsWith(".neb"))
+				.toList();
+
+		if (nebulaFiles.isEmpty())
 		{
-			Debug.logError("The specified file does not exist: " + inputFile);
+			throw new IllegalArgumentException("Executable build requires at least one .neb source file.");
+		}
+
+		// --- Parse all input files first ---
+		List<ParseTree> trees = new ArrayList<>();
+		for (Path file : nebulaFiles)
+		{
+			if (!Files.exists(file))
+			{
+				Debug.logError("The specified file does not exist: " + file);
+				return;
+			}
+
+			ParseTree tree = parseFile(file);
+			if (tree != null)
+			{
+				trees.add(tree);
+			}
+		}
+
+		if (trees.isEmpty())
+		{
+			Debug.logError("No valid parse trees generated. Aborting.");
 			return;
 		}
 
-		// 1. Semantic Analysis
-		Debug.logDebug("\nStarting semantic analysis for executable...");
-		// Pass library paths from arguments to the analyzer
+		// --- Semantic Analysis (multi-file, with linked libraries) ---
+		Debug.logDebug("Starting semantic analysis for executable...");
 		SemanticAnalyzer analyzer = new SemanticAnalyzer(args.getLibraryFiles(), args.getLibrarySearchPaths(), errorHandler);
-		ParseTree tree = parseFile(inputFile);
 
-		if (tree == null)
-		{ // parseFile handles syntax error logging
-			return;
-		}
-
-		boolean success = analyzer.analyze(tree);
+		boolean success = analyzer.analyze(trees);
 		if (!success || errorHandler.hasErrors())
 		{
 			Debug.logError("Compilation failed due to semantic errors.");
 			return;
 		}
 
-		// 2. Check Only?
+		// --- Check Only? ---
 		if (args.isCheckOnly())
 		{
-			Debug.logInfo("Semantic check passed. No output generated as -k was specified.");
+			Debug.logInfo("Semantic check passed. No output generated (-k flag).");
 			return;
 		}
 
-		// 3. Code Generation (LLVM IR)
+		// --- Code Generation (LLVM IR) ---
 		Debug.logDebug("Semantic analysis passed. Generating LLVM IR...");
-		Path llvmIrPath = getOutputPath(args, inputFile, ".ll");
-		CodeGenerator codeGenerator = new CodeGenerator(tree, analyzer, llvmIrPath);
+		Path llvmIrPath = getOutputPath(args, nebulaFiles.get(0), ".ll");
+		CodeGenerator codeGenerator = new CodeGenerator(trees, analyzer, llvmIrPath);
 		codeGenerator.generate();
 
-		// 4. Native Compilation & Linking
+		// --- Native Compilation & Linking ---
 		Debug.logDebug("Compiling and linking executable...");
 		compileAndLink(args, llvmIrPath);
 
 		Debug.logInfo("Compilation successful.");
-		Debug.logInfo("Executable created at: " + getOutputPath(args, inputFile, ""));
+		Debug.logInfo("Executable created at: " + getOutputPath(args, nebulaFiles.get(0), ""));
 	}
 
 	/**
@@ -145,86 +156,86 @@ public class Main
 	{
 		Debug.logDebug("\nStarting library build...");
 
-		// In a project-based build, we'd parse the .nebproj file here.
-		// For now, we'll collect all .neb files passed as arguments.
 		List<Path> nebulaFiles = args.getInputFiles().stream()
 				.filter(p -> p.toString().endsWith(".neb"))
 				.toList();
 
 		if (nebulaFiles.isEmpty())
 		{
-			throw new IllegalArgumentException("Library build requires at least one .neb input file.");
+			throw new IllegalArgumentException("Library build requires at least one .neb source file.");
 		}
 
-		// 1. Semantic Analysis (Two-Pass for library symbols)
-		Scope global = new Scope(null);
-		Map<String, ClassSymbol> declaredClasses = new HashMap<>();
-		BuiltInTypeLoader.definePrimitives(global);
-
-		// --- PASS 1: Discover all types ---
-		SymbolTableBuilder discoveryVisitor = new SymbolTableBuilder(global, declaredClasses, errorHandler, true);
+		// --- Parse all input files ---
+		List<ParseTree> libraryTrees = new ArrayList<>();
 		for (Path p : nebulaFiles)
 		{
-			Debug.logDebug("Discovering types in library file: " + p);
 			ParseTree tree = parseFile(p);
 			if (tree != null)
 			{
-				discoveryVisitor.visit(tree);
+				libraryTrees.add(tree);
 			}
 		}
 
-		if (declaredClasses.containsKey("nebula.core.String"))
+		if (libraryTrees.isEmpty())
 		{
-			global.define(new AliasSymbol("string", declaredClasses.get("nebula.core.String")));
+			Debug.logError("No valid parse trees found. Aborting.");
+			return;
 		}
 
-		// --- PASS 2: Define members ---
-		SymbolTableBuilder memberVisitor = new SymbolTableBuilder(global, declaredClasses, errorHandler, false);
-		for (Path p : nebulaFiles)
-		{
-			Debug.logDebug("Defining members in library file: " + p);
-			ParseTree tree = parseFile(p);
-			if (tree != null)
-			{
-				memberVisitor.visit(tree);
-			}
-		}
-
-		if (errorHandler.hasErrors())
+		// --- Semantic Analysis (multi-file) ---
+		SemanticAnalyzer analyzer = new SemanticAnalyzer(new ArrayList<>(), new ArrayList<>(), errorHandler);
+		if (!analyzer.analyze(libraryTrees))
 		{
 			Debug.logError("Library build failed due to semantic errors.");
 			return;
 		}
 
-		// (We skip TypeCheckVisitor for library builds for now, as it requires a full main/entry)
 		Debug.logInfo("Semantic analysis passed.");
 
-		// 2. Compile Native Sources
-		Path buildDir = getOutputPath(args, nebulaFiles.get(0), "").getParent().resolve("build");
+		// --- Code Generation ---
+		Debug.logDebug("Generating LLVM IR for library...");
+		Path outputNeblib = getOutputPath(args, nebulaFiles.get(0), ".neblib");
+		Path buildDir = outputNeblib.getParent().resolve("build");
+		String libBaseName = outputNeblib.getFileName().toString().replace(".neblib", "");
+		Path libIrPath = buildDir.resolve(libBaseName + ".ll");
+		Path libObjPath = buildDir.resolve(libBaseName + ".o");
+
+		CodeGenerator codeGenerator = new CodeGenerator(libraryTrees, analyzer, libIrPath);
+		codeGenerator.generate();
+
+		// --- Native Compilation ---
 		NativeCompiler nativeCompiler = new NativeCompiler(errorHandler, buildDir);
 
-		// We get native files explicitly from the -n flag
-		List<Path> objectFiles = nativeCompiler.compileObjectFiles(args.getNativeSourceFiles());
+		ProcessBuilder compileLibIr = new ProcessBuilder(
+				"clang",
+				"-c",
+				"-Wno-override-module",
+				libIrPath.toAbsolutePath().toString(),
+				"-o",
+				libObjPath.toAbsolutePath().toString()
+		);
+		executeCommand(compileLibIr);
+		Debug.logDebug("Compiled library IR to: " + libObjPath);
 
-		// 3. Archive Native Library
-		// Default output name logic
-		Path outputNeblib = getOutputPath(args, nebulaFiles.get(0), ".neblib");
-		String libBaseName = outputNeblib.getFileName().toString().replace(".neblib", "");
+		// --- Compile any native sources provided with -n ---
+		List<Path> objectFiles = nativeCompiler.compileObjectFiles(args.getNativeSourceFiles());
+		objectFiles.add(libObjPath);
+
+		// --- Archive static library (.a) ---
 		String staticLibName = "lib" + libBaseName + ".a";
 		Path staticLibPath = null;
-
 		if (!objectFiles.isEmpty())
 		{
 			staticLibPath = nativeCompiler.archiveStaticLibrary(objectFiles, staticLibName);
 		}
 
-		// 4. Write .neblib Metadata
+		// --- Write .neblib metadata ---
 		LibraryDTO lib = new LibraryDTO();
 		lib.name = libBaseName;
-		lib.namespaces = SymbolDTOConverter.toNamespaces(global);
+		lib.namespaces = SymbolDTOConverter.toNamespaces(analyzer.globalScope);
 		writeLibraryMetadata(lib, outputNeblib);
 
-		// 5. Copy static lib to output directory
+		// --- Copy static lib next to .neblib ---
 		if (staticLibPath != null && Files.exists(staticLibPath))
 		{
 			Path destLib = outputNeblib.resolveSibling(staticLibPath.getFileName());
