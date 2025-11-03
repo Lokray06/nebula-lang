@@ -218,6 +218,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			}
 
 			boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+			ClassSymbol newTypeSymbol;
 
 			if (isClass)
 			{
@@ -227,6 +228,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 				declaredClasses.put(fqn, cs);
 				currentScope.define(cs);
 				Debug.logDebug("Defined " + (isNative ? "native " : "") + "class " + cs.getName());
+				newTypeSymbol = cs;
 			}
 			else // struct
 			{
@@ -236,7 +238,38 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 				declaredClasses.put(fqn, structSymbol);
 				currentScope.define(structSymbol);
 				Debug.logDebug("Defined " + (isNative ? "native " : "") + "struct " + structSymbol.getName());
+				newTypeSymbol = structSymbol;
 			}
+
+			// Process its type parameters.
+			// We must also push the symbol onto the scope stack *before* processing
+			// parameters, so the parameters are defined *inside* the class scope.
+			Scope oldScope = currentScope;
+			currentScope = newTypeSymbol;
+
+			if (ctx.typeParameterList() != null)
+			{
+				Debug.logDebug("  Parsing type parameters for " + typeName + "...");
+				for (var paramCtx : ctx.typeParameterList().typeParameter())
+				{
+					String paramName = paramCtx.ID().getText();
+
+					// Check if parameter name conflicts with the class name
+					if (paramName.equals(typeName))
+					{
+						errorHandler.logError(paramCtx.ID().getSymbol(), "A type parameter cannot have the same name as its enclosing type '" + paramName + "'.", null); // currentClass is null here
+						continue;
+					}
+
+					TypeParameterSymbol paramSymbol = new TypeParameterSymbol(paramName);
+					newTypeSymbol.addTypeParameter(paramSymbol);
+					currentScope.define(paramSymbol); // Define 'T' within the class's scope
+					Debug.logDebug("    Defined type parameter: " + paramName);
+				}
+			}
+
+			// Restore the original scope (e.g., the namespace)
+			currentScope = oldScope;
 			return null;
 		}
 
@@ -259,6 +292,13 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			currentClass = cs;
 			Scope oldScope = currentScope;
 			currentScope = cs;
+
+			// Type parameters must also be defined in the scope for Pass 2
+			// so that member definitions (fields, methods) can resolve them.
+			for (TypeParameterSymbol paramSymbol : cs.getTypeParameters())
+			{
+				currentScope.define(paramSymbol);
+			}
 
 			// Visit all members (fields, methods, constructors, properties)
 			visitChildren(ctx);
@@ -298,6 +338,12 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			currentClass = structSymbol;
 			Scope oldScope = currentScope;
 			currentScope = structSymbol;
+
+			// Re-define parameters for Pass 2
+			for (TypeParameterSymbol paramSymbol : structSymbol.getTypeParameters())
+			{
+				currentScope.define(paramSymbol);
+			}
 
 			visitChildren(ctx);
 

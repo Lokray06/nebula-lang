@@ -117,6 +117,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		}
 
 		String baseTypeName;
+		NebulaParser.QualifiedNameContext qualifiedNameCtx = null;
 		if (ctx.primitiveType() != null)
 		{
 			baseTypeName = ctx.primitiveType().getText();
@@ -124,6 +125,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		else if (ctx.qualifiedName() != null)
 		{
 			// Use getFqn to properly handle namespaces
+			qualifiedNameCtx = ctx.qualifiedName(); // Store context for generics resolution
 			baseTypeName = getFqn(ctx.qualifiedName());
 		}
 		else
@@ -160,6 +162,51 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		if (baseType instanceof UnresolvedType)
 		{
 			baseType = resolveUnresolvedType((UnresolvedType) baseType, ctx.start);
+		}
+
+		// Check if the resolved symbol is a generic class definition (e.g., List<T>)
+		ClassSymbol baseClassSymbol = symbol.get().getClassSymbol();
+
+		if (baseClassSymbol != null && baseClassSymbol.isGenericDefinition())
+		{
+
+			// It's a generic type. We MUST have type arguments.
+			// The grammar stores typeArgumentList inside qualifiedName
+			NebulaParser.TypeArgumentListContext argListCtx = (qualifiedNameCtx != null && !qualifiedNameCtx.typeArgumentList().isEmpty())
+					? qualifiedNameCtx.typeArgumentList(0) // Get the first (and only) argument list
+					: null;
+
+			if (argListCtx == null)
+			{
+				logError(ctx.start, "Generic type '" + baseClassSymbol.getName() + "' requires type arguments (e.g., '" + baseClassSymbol.getName() + "<int>').");
+				return ErrorType.INSTANCE;
+			}
+
+			// 1. Resolve all concrete type arguments
+			List<Type> typeArguments = new ArrayList<>();
+			for (NebulaParser.TypeContext typeArgCtx : argListCtx.type())
+			{
+				typeArguments.add(resolveType(typeArgCtx)); // Recurse
+			}
+
+			// 2. Validate argument count
+			int expectedCount = baseClassSymbol.getTypeParameters().size();
+			int actualCount = typeArguments.size();
+			if (actualCount != expectedCount)
+			{
+				logError(argListCtx.start, "Incorrect number of type arguments for '" + baseClassSymbol.getName() + "'. Expected " + expectedCount + ", but got " + actualCount + ".");
+				return ErrorType.INSTANCE;
+			}
+
+			// 3. Instantiate the generic type
+			baseType = new GenericType(baseClassSymbol, typeArguments);
+
+		}
+		else if (qualifiedNameCtx != null && !qualifiedNameCtx.typeArgumentList().isEmpty())
+		{
+			// This is a non-generic type (like 'int') being used with type arguments (e.g., 'int<string>')
+			logError(qualifiedNameCtx.typeArgumentList(0).start, "Type '" + baseTypeName + "' is not generic and cannot have type arguments.");
+			return ErrorType.INSTANCE;
 		}
 
 		int rank = ctx.L_BRACK_SYM().size();
@@ -1235,16 +1282,14 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		}
 		else if (currentSymbol != null)
 		{
-			if (currentSymbol instanceof ClassSymbol ||
-					currentSymbol instanceof StructSymbol ||
-					currentSymbol instanceof NamespaceSymbol)
+			if (currentSymbol instanceof ClassSymbol || currentSymbol instanceof NamespaceSymbol)
 			{
 				primaryIsTypeName = true;
 			}
 			else if (currentSymbol instanceof AliasSymbol)
 			{
 				Symbol target = ((AliasSymbol) currentSymbol).getTargetSymbol();
-				if (target instanceof ClassSymbol || target instanceof StructSymbol || target instanceof NamespaceSymbol)
+				if (target instanceof ClassSymbol || target instanceof NamespaceSymbol)
 				{
 					primaryIsTypeName = true;
 				}
@@ -1276,19 +1321,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				}
 
 				String memberName = ctx.getChild(i).getText();
-				Scope scopeToSearch = currentType.getClassSymbol();
-
-				if (scopeToSearch == null)
-				{
-					if (currentType instanceof NamespaceType)
-					{
-						scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
-					}
-					else if (currentType instanceof TupleType)
-					{
-						scopeToSearch = (TupleType) currentType;
-					}
-				}
+				Scope scopeToSearch = searchScope(currentType);
 
 				if (scopeToSearch == null)
 				{
@@ -1309,9 +1342,14 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 					currentSymbol = ((AliasSymbol) currentSymbol).getTargetSymbol();
 				}
 
+				if (currentType instanceof GenericType genericType)
+				{
+					currentSymbol = performSubstitution(currentSymbol, genericType);
+				}
+
 				if (currentSymbol instanceof MethodSymbol)
 				{
-					note(ctx, currentSymbol); // <--- ADD THIS LINE TO RECORD THE METHOD GROUP
+					note(ctx, currentSymbol); // Record the method group
 				}
 
 				currentType = currentSymbol.getType();
@@ -1364,7 +1402,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			i++;
 		}
 
-		// --- START FIX ---
 		// Store the final resolved symbol against the *entire* postfix expression node.
 		// This is crucial so that parent visitors (like visitStatementExpression)
 		// can retrieve the symbol from *this* node.
@@ -1372,14 +1409,35 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		{
 			note(ctx, currentSymbol);
 		}
-		// --- END FIX ---
 
 		note(ctx, currentType);
 
 		return currentType;
 	}
 
-	// --- NEWLY FIXED Bitwise Visitors (Based on parser grammar) ---
+	private static Scope searchScope(Type currentType)
+	{
+		Scope scopeToSearch = currentType.getClassSymbol();
+
+		// If we are accessing a member on an instantiated generic type (e.g., List<int>)
+		if (currentType instanceof GenericType genericType)
+		{
+			scopeToSearch = genericType.getBaseSymbol(); // Search the base class (List<T>)
+		}
+
+		if (scopeToSearch == null)
+		{
+			if (currentType instanceof NamespaceType)
+			{
+				scopeToSearch = ((NamespaceType) currentType).getNamespaceSymbol();
+			}
+			else if (currentType instanceof TupleType)
+			{
+				scopeToSearch = (TupleType) currentType;
+			}
+		}
+		return scopeToSearch;
+	}
 
 	@Override
 	public Type visitLogicalOrExpression(NebulaParser.LogicalOrExpressionContext ctx)
@@ -2856,5 +2914,173 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Performs type substitution on a member symbol retrieved from a generic base class.
+	 * <p>
+	 * Example:
+	 * Base Member:  MethodSymbol "T get(int index)" (from List<T>)
+	 * Context:      GenericType "List<string>"
+	 * Result:       A new, temporary MethodSymbol "string get(int index)"
+	 *
+	 * @param baseMember The original symbol from the generic class (e.g., with 'T').
+	 * @param context    The instantiated generic type (e.g., 'List<string>').
+	 * @return A new Symbol with all type parameters replaced by concrete type arguments.
+	 */
+	private Symbol performSubstitution(Symbol baseMember, GenericType context)
+	{
+		// 1. Build the substitution map (e.g., T -> string)
+		Map<TypeParameterSymbol, Type> substitutionMap = new HashMap<>();
+		List<TypeParameterSymbol> typeParams = context.getBaseSymbol().getTypeParameters();
+		List<Type> typeArgs = context.getTypeArguments();
+
+		for (int i = 0; i < typeParams.size(); i++)
+		{
+			substitutionMap.put(typeParams.get(i), typeArgs.get(i));
+		}
+
+		// 2. Recursively substitute types within the member
+		if (baseMember instanceof MethodSymbol baseMethod)
+		{
+			// 2a. Substitute return type
+			Type substitutedReturnType = substituteType(baseMethod.getType(), substitutionMap);
+
+			// 2b. Substitute parameters
+			List<ParameterSymbol> substitutedParams = new ArrayList<>();
+			boolean paramsChanged = false;
+			for (ParameterSymbol baseParam : baseMethod.getParameters())
+			{
+				Type substitutedParamType = substituteType(baseParam.getType(), substitutionMap);
+				if (substitutedParamType != baseParam.getType())
+				{
+					paramsChanged = true;
+				}
+				// Create a new ParameterSymbol with the substituted type
+				substitutedParams.add(new ParameterSymbol(
+						baseParam.getName(),
+						substitutedParamType,
+						baseParam.getPosition(),
+						baseParam.getDefaultValueCtx().orElse(null)
+				));
+			}
+
+			// 3. If no types changed, return the original symbol
+			if (substitutedReturnType == baseMethod.getType() && !paramsChanged)
+			{
+				return baseMethod;
+			}
+
+			// 4. Create a new, temporary MethodSymbol with the substituted types
+			// This symbol is "ephemeral" and used only for this type check.
+			return new MethodSymbol(
+					baseMethod.getName(),
+					substitutedReturnType,
+					substitutedParams,
+					baseMethod.getEnclosingScope(), // Scope remains the base class
+					baseMethod.isStatic(),
+					baseMethod.isPublic(),
+					baseMethod.isConstructor(),
+					baseMethod.isNative()
+			);
+
+		}
+		else if (baseMember instanceof VariableSymbol baseField)
+		{
+			// 1. Substitute field type
+			Type substitutedFieldType = substituteType(baseField.getType(), substitutionMap);
+
+			if (substitutedFieldType == baseField.getType())
+			{
+				return baseField; // No substitution occurred
+			}
+
+			// 2. Create a new, temporary VariableSymbol
+			return new VariableSymbol(
+					baseField.getName(),
+					substitutedFieldType,
+					baseField.isStatic(),
+					baseField.isPublic(),
+					baseField.isConst(),
+					baseField.isNative()
+			);
+		}
+
+		// Not a method or field, or no substitution needed (e.g., a nested class)
+		return baseMember;
+	}
+
+	/**
+	 * Recursive helper to replace TypeParameterTypes with concrete types from a map.
+	 *
+	 * @param type The type to check (e.g., T, List<T>, int, T[]).
+	 * @param map  The substitution map (e.g., T -> string).
+	 * @return The substituted type (e.g., string, List<string>, int, string[]).
+	 */
+	private Type substituteType(Type type, Map<TypeParameterSymbol, Type> map)
+	{
+		if (type instanceof TypeParameterType tpt)
+		{
+			// This is a type parameter (e.g., 'T').
+			// Look it up in the map and return the concrete type (e.g., 'string').
+			return map.getOrDefault(tpt.getSymbol(), type);
+		}
+
+		if (type instanceof ArrayType arrayType)
+		{
+			// Recursively substitute the element type
+			Type substitutedElementType = substituteType(arrayType.getElementType(), map);
+			if (substitutedElementType == arrayType.getElementType())
+			{
+				return arrayType; // No change
+			}
+			return new ArrayType(substitutedElementType);
+		}
+
+		if (type instanceof TupleType tupleType)
+		{
+			// Recursively substitute all element types in the tuple
+			List<TupleElementSymbol> substitutedElements = new ArrayList<>();
+			boolean changed = false;
+			for (TupleElementSymbol element : tupleType.getElements())
+			{
+				Type substitutedType = substituteType(element.getType(), map);
+				if (substitutedType != element.getType())
+				{
+					changed = true;
+				}
+				substitutedElements.add(new TupleElementSymbol(element.getName(), substitutedType, element.getIndex()));
+			}
+			if (!changed)
+			{
+				return tupleType; // No change
+			}
+			return new TupleType(substitutedElements);
+		}
+
+		if (type instanceof GenericType genericType)
+		{
+			// This is a nested generic type, e.g., List<T> used inside Dictionary<K, V>
+			// where we are substituting K and V.
+			List<Type> substitutedArgs = new ArrayList<>();
+			boolean changed = false;
+			for (Type arg : genericType.getTypeArguments())
+			{
+				Type substitutedArg = substituteType(arg, map);
+				if (substitutedArg != arg)
+				{
+					changed = true;
+				}
+				substitutedArgs.add(substitutedArg);
+			}
+			if (!changed)
+			{
+				return genericType; // No change
+			}
+			return new GenericType(genericType.getBaseSymbol(), substitutedArgs);
+		}
+
+		// It's a concrete type (int, string, etc.), no substitution needed.
+		return type;
 	}
 }
