@@ -104,9 +104,9 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		if (ctx.tupleType() != null)
 		{
 			List<TupleElementSymbol> elements = new ArrayList<>();
-			for (int i = 0; i < ctx.tupleType().tupleTypeElement().size(); i++)
+			for (int i = 0; i < ctx.tupleType().tupleElement().size(); i++)
 			{
-				var elementCtx = ctx.tupleType().tupleTypeElement(i);
+				var elementCtx = ctx.tupleType().tupleElement(i);
 				Type elementType = resolveType(elementCtx.type());
 				String name = elementCtx.ID() != null ? elementCtx.ID().getText() : null;
 
@@ -246,61 +246,35 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	}
 
 	@Override
-	public Type visitClassDeclaration(NebulaParser.ClassDeclarationContext ctx)
+	public Type visitTypeDeclaration(NebulaParser.TypeDeclarationContext ctx)
 	{
-		String className = ctx.ID().getText();
-		currentClass = (ClassSymbol) currentScope.resolveLocally(className).orElse(null);
-		if (currentClass == null)
-		{
-			Debug.logDebug("Class itself is apparently null??");
-			return null;
-		}
-		currentScope = currentClass;
-		if (ctx.classBody() != null)
-		{
-			for (var member : ctx.classBody())
-			{
-				visit(member);
-			}
-		}
-		currentScope = currentScope.getEnclosingScope();
-		currentClass = null;
-		return null;
-	}
+		boolean isClass = ctx.CLASS_KW() != null;
+		boolean isStruct = ctx.STRUCT_KW() != null;
+		boolean isNative = ctx.NATIVE_KW() != null;
 
-	@Override
-	public Type visitStructDeclaration(NebulaParser.StructDeclarationContext ctx)
-	{
-		String structName = ctx.ID().getText();
-		// Resolve the ClassSymbol created in the first pass (SymbolTableBuilder)
-		ClassSymbol structSymbol = (ClassSymbol) currentScope.resolveLocally(structName).orElse(null);
-		if (structSymbol == null)
+		// Pick the correct symbol type (ClassSymbol or StructSymbol)
+		String name = ctx.ID().getText();
+		ClassSymbol typeSymbol = (ClassSymbol) currentScope.resolveLocally(name).orElse(null);
+		if (typeSymbol == null)
 		{
-			// This would be an internal error if SymbolTableBuilder ran correctly
-			logError(ctx.start, "Internal error: Struct symbol '" + structName + "' not found.");
+			logError(ctx.start, "Internal error: Type symbol '" + name + "' not found.");
 			return null;
 		}
 
-		// --- SCOPE SHIFT ---
-		// Backup and set the current context before visiting members
+		// Backup context
 		ClassSymbol oldClass = currentClass;
-		currentClass = structSymbol;
 		Scope oldScope = currentScope;
-		currentScope = structSymbol; // <-- This is the crucial step
 
-		// Visit the members inside the struct body
-		if (ctx.structBody() != null)
-		{
-			for (var member : ctx.structBody())
-			{
-				visit(member); // Now, when visitConstructorDeclaration is called, currentScope IS a ClassSymbol
-			}
-		}
+		currentClass = typeSymbol;
+		currentScope = typeSymbol;
 
-		// --- SCOPE RESTORE ---
-		// Restore the context after leaving the struct
+		// Visit all members
+		visitChildren(ctx);
+
+		// Restore
 		currentScope = oldScope;
 		currentClass = oldClass;
+
 		return null;
 	}
 
@@ -575,82 +549,58 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	@Override
 	public Type visitStatement(NebulaParser.StatementContext ctx)
 	{
-		Debug.logDebug("VISIT STATEMENT -> hasExpr=" + (ctx.statementExpression() != null)
-				+ " hasReturn=" + (ctx.returnStatement() != null)
-				+ " hasFor=" + (ctx.forStatement() != null)
-				+ " childCount=" + ctx.getChildCount());
-
-		// then same body as before but keep it unchanged for diagnosis
-		if (ctx.statementExpression() != null)
+		// If it's an expression statement, handle possible method call
+		if (ctx.expression() != null)
 		{
-			return visit(ctx.statementExpression());
-		}
-		if (ctx.returnStatement() != null)
-		{
-			return visit(ctx.returnStatement());
-		}
-		return (Type) super.visitChildren(ctx);
-	}
+			// Check if expression looks like a method call:
+			var expr = ctx.expression();
 
-	@Override
-	public Type visitStatementExpression(NebulaParser.StatementExpressionContext ctx)
-	{
-		// Check if the context has enough children AND if the second child is the '(' terminal token.
-		boolean isMethodCall = ctx.postfixExpression() != null
-				&& ctx.getChildCount() >= 2
-				&& ctx.getChild(1) instanceof TerminalNode
-				&& ((TerminalNode) ctx.getChild(1)).getSymbol().getType() == NebulaLexer.L_PAREN_SYM; // Assuming NebulaLexer is available
-
-		if (isMethodCall)
-		{
-			// --- START REPLACEMENT ---
-			// 1. Visit the postfix part (e.g., "Console.println") to resolve it
-			visit(ctx.postfixExpression());
-			Symbol methodGroupSymbol = resolvedSymbols.get(ctx.postfixExpression());
-
-			Debug.logDebug(methodGroupSymbol.getName());
-
-			if (!(methodGroupSymbol instanceof MethodSymbol))
+			// It could be a postfix expression like "obj.method(...)" or a standalone "method(...)".
+			NebulaParser.PostfixExpressionContext postfix = findPostfix(expr);
+			if (postfix != null && looksLikeMethodCall(postfix))
 			{
-				// This should ideally be caught by visitPostfixExpression, but good to check
-				logError(ctx.start, "'" + ctx.postfixExpression().getText() + "' is not a method.");
-				return ErrorType.INSTANCE;
+				// Resolve the method call using existing logic
+				visit(postfix);
+				Symbol methodGroupSymbol = resolvedSymbols.get(postfix);
+
+				if (!(methodGroupSymbol instanceof MethodSymbol))
+				{
+					logError(ctx.start, "'" + postfix.getText() + "' is not a method.");
+					return ErrorType.INSTANCE;
+				}
+
+				// Get owning class
+				Scope enclosingScope = ((MethodSymbol) methodGroupSymbol).getEnclosingScope();
+				if (!(enclosingScope instanceof ClassSymbol classOfMethod))
+				{
+					logError(ctx.start, "Internal error: Method is not part of a class.");
+					return ErrorType.INSTANCE;
+				}
+
+				String methodName = methodGroupSymbol.getName();
+				// The argument list is inside the postfix expression
+				NebulaParser.ArgumentListContext argListCtx = extractArgumentList(postfix);
+
+				Type returnType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
+
+				Symbol resolvedSymbol = resolvedSymbols.get(ctx);
+				if (resolvedSymbol instanceof MethodSymbol resolvedMethod)
+				{
+					Debug.logDebug(resolvedMethod.toString());
+				}
+				else
+				{
+					System.out.println("Error: Method call resolution failed for: " + ctx.getText());
+				}
+
+				return returnType;
 			}
 
-			// 2. Get the class that owns the method
-			Scope enclosingScope = ((MethodSymbol) methodGroupSymbol).getEnclosingScope();
-			if (!(enclosingScope instanceof ClassSymbol classOfMethod))
-			{
-				logError(ctx.start, "Internal error: Method is not part of a class.");
-				return ErrorType.INSTANCE;
-			}
-
-			String methodName = methodGroupSymbol.getName();
-			NebulaParser.ArgumentListContext argListCtx = ctx.argumentList();
-
-			// 3. DELEGATE to the robust visitMethodCall logic!
-			// We pass 'ctx' (the StatementExpression) as the "call context" for error reporting
-			// and for 'note'-ing the resolved symbol.
-			Type returnType = visitMethodCall(ctx, classOfMethod, methodName, argListCtx);
-
-			// 4. (Optional) Log the successful resolution
-			// visitMethodCall already does the 'note(ctx, bestMatch)', so we can check it.
-			Symbol resolvedSymbol = resolvedSymbols.get(ctx);
-			if (resolvedSymbol instanceof MethodSymbol resolvedMethod)
-			{
-				Debug.logDebug(resolvedMethod.toString());
-			}
-			else
-			{
-				// This else block will be hit if visitMethodCall failed and returned ErrorType
-				System.out.println("Error: Method call resolution failed for: " + ctx.getText());
-			}
-
-			return returnType;
-			// --- END REPLACEMENT ---
+			// Fallback: regular expression
+			return visit(expr);
 		}
 
-		// fallback for other statement expressions
+		// Default handling for other statements (blocks, if, loops, etc.)
 		return visitChildren(ctx);
 	}
 
@@ -1090,42 +1040,156 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return globalScope.resolve("string").get().getType();
 	}
 
-	// UPDATED: Handle tuple assignment, including by name
 	@Override
 	public Type visitAssignmentExpression(NebulaParser.AssignmentExpressionContext ctx)
 	{
-		Type targetType = visit(ctx.conditionalExpression(0));
-		if (ctx.assignmentOperator() != null)
+		// First, if there's no assignment operator, it's just an expression (pass through)
+		if (ctx.assignmentOperator() == null)
 		{
-			if (targetType instanceof ErrorType)
-			{
-				return ErrorType.INSTANCE;
-			}
-			Type valueType = visit(ctx.conditionalExpression(1));
-			if (valueType instanceof ErrorType)
-			{
-				return ErrorType.INSTANCE;
-			}
+			Type t = visit(ctx.conditionalExpression(0));
+			note(ctx, t);
+			return t;
+		}
 
-			boolean isAssignable;
-			// Check for special case: assigning a named tuple literal to a tuple type
-			if (targetType.isTuple() && valueType.isTuple() && !((TupleType) valueType).getElements().isEmpty() && ((TupleType) valueType).getElements().get(0).getName() != null)
+		// Otherwise, handle assignment
+		// LHS = first conditional expression
+		// RHS = second conditional expression
+		ParseTree lhsRoot = ctx.conditionalExpression(0);
+		Type targetType = null;
+
+		// --- LHS resolution ---
+		// Try to extract a PostfixExpression if available (either directly or inside a unaryExpression)
+		NebulaParser.PostfixExpressionContext lhsPostfix = null;
+		if (lhsRoot instanceof NebulaParser.PostfixExpressionContext pf)
+		{
+			lhsPostfix = pf;
+		}
+		else if (lhsRoot instanceof NebulaParser.UnaryExpressionContext ue && ue.postfixExpression() != null)
+		{
+			lhsPostfix = ue.postfixExpression();
+		}
+
+		if (lhsPostfix != null)
+		{
+			// Check for simple member access pattern: ... . ID
+			int lastIndex = lhsPostfix.getChildCount() - 1;
+			if (lastIndex >= 2 &&
+					lhsPostfix.getChild(lastIndex - 1) instanceof TerminalNode dotNode &&
+					dotNode.getSymbol().getType() == NebulaLexer.DOT_SYM &&
+					lhsPostfix.getChild(lastIndex) instanceof TerminalNode memberIdNode &&
+					((TerminalNode) memberIdNode).getSymbol().getType() == NebulaLexer.ID)
 			{
-				isAssignable = checkNamedTupleAssignment((TupleType) targetType, (TupleType) valueType, ctx.conditionalExpression(1).start);
+				// --- Member assignment (e.g. p1.name = ...) ---
+				// 1) Resolve the object's type (thing before the dot)
+				Type targetObjectType = visit(lhsPostfix.primary());
+
+				if (targetObjectType instanceof ErrorType || targetObjectType.getClassSymbol() == null)
+				{
+					return ErrorType.INSTANCE; // error already reported
+				}
+
+				ClassSymbol owningClass = targetObjectType.getClassSymbol();
+				String memberName = memberIdNode.getText();
+
+				// 2) Resolve the member symbol inside the owning class
+				Optional<Symbol> memberOpt = owningClass.resolve(memberName);
+				if (memberOpt.isEmpty() || !(memberOpt.get() instanceof VariableSymbol memberSymbol))
+				{
+					logError(memberIdNode.getSymbol(), "Cannot find field or property '" + memberName +
+							"' in type '" + owningClass.getName() + "'.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.A Visibility: private check
+				if (!memberSymbol.isPublic() && owningClass != currentClass)
+				{
+					logError(memberIdNode.getSymbol(),
+							"Cannot access private member '" + memberName + "' from outside its class.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.B Const / immutability check
+				if (memberSymbol.isConst())
+				{
+					logError(memberIdNode.getSymbol(),
+							"Cannot assign to constant field/property '" + memberName + "'.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 3.C Property setter existence & accessibility
+				String setterName = "set_" + memberName;
+				List<MethodSymbol> setterCandidates = owningClass.resolveMethods(setterName)
+						.stream()
+						.filter(ms -> ms.getParameters().size() == 1)
+						.collect(Collectors.toList());
+
+				if (setterCandidates.isEmpty())
+				{
+					logError(memberIdNode.getSymbol(),
+							"Cannot assign to read-only property '" + memberName + "'. Setter not defined.");
+					return ErrorType.INSTANCE;
+				}
+
+				boolean setterAccessible = setterCandidates.stream()
+						.anyMatch(ms -> ms.isPublic() || owningClass == currentClass);
+				if (!setterAccessible)
+				{
+					logError(memberIdNode.getSymbol(),
+							"Cannot assign to property '" + memberName + "': setter is not accessible from here.");
+					return ErrorType.INSTANCE;
+				}
+
+				// 4) Link and return the member type
+				this.resolvedSymbols.put(memberIdNode, memberSymbol);
+				targetType = memberSymbol.getType();
 			}
 			else
 			{
-				isAssignable = valueType.isAssignableTo(targetType);
+				// Not a direct .ID pattern — evaluate normally
+				targetType = visit(lhsPostfix);
 			}
-
-			if (!isAssignable)
-			{
-				logError(ctx.assignmentOperator().start, "Incompatible types: cannot assign '" + valueType.getName() + "' to '" + targetType.getName() + "'.");
-				return ErrorType.INSTANCE;
-			}
-			note(ctx, targetType);
-			return targetType;
 		}
+		else
+		{
+			// Fallback: evaluate LHS as a general expression
+			targetType = visit(lhsRoot);
+		}
+
+		if (targetType instanceof ErrorType)
+		{
+			return ErrorType.INSTANCE;
+		}
+
+		// --- RHS evaluation ---
+		Type valueType = visit(ctx.conditionalExpression(1));
+		if (valueType instanceof ErrorType)
+		{
+			return ErrorType.INSTANCE;
+		}
+
+		boolean isAssignable;
+
+		// Special case: named tuple literal assigned to a tuple variable
+		if (targetType.isTuple() && valueType.isTuple()
+				&& !((TupleType) valueType).getElements().isEmpty()
+				&& ((TupleType) valueType).getElements().get(0).getName() != null)
+		{
+			isAssignable = checkNamedTupleAssignment((TupleType) targetType,
+					(TupleType) valueType,
+					ctx.conditionalExpression(1).start);
+		}
+		else
+		{
+			isAssignable = valueType.isAssignableTo(targetType);
+		}
+
+		if (!isAssignable)
+		{
+			logError(ctx.assignmentOperator().start,
+					"Incompatible types: cannot assign '" + valueType.getName() + "' to '" + targetType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+
 		note(ctx, targetType);
 		return targetType;
 	}
@@ -2235,121 +2299,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return result;
 	}
 
-	@Override
-	public Type visitActualAssignment(NebulaParser.ActualAssignmentContext ctx)
-	{
-		// The LHS is the first child; it can be a PostfixExpression OR a UnaryExpression that contains a PostfixExpression.
-		ParseTree lhsRoot = ctx.getChild(0);
-		Type targetType = null;
-
-		// First, try to extract a PostfixExpression if available (either directly or inside a unaryExpression).
-		NebulaParser.PostfixExpressionContext lhsPostfix = null;
-		if (lhsRoot instanceof NebulaParser.PostfixExpressionContext pf)
-		{
-			lhsPostfix = pf;
-		}
-		else if (lhsRoot instanceof NebulaParser.UnaryExpressionContext ue && ue.postfixExpression() != null)
-		{
-			lhsPostfix = ue.postfixExpression();
-		}
-
-		if (lhsPostfix != null)
-		{
-			// Check for simple member access pattern: ... . ID
-			int lastIndex = lhsPostfix.getChildCount() - 1;
-			if (lastIndex >= 2 &&
-					lhsPostfix.getChild(lastIndex - 1) instanceof TerminalNode dotNode &&
-					dotNode.getSymbol().getType() == NebulaLexer.DOT_SYM &&
-					lhsPostfix.getChild(lastIndex) instanceof TerminalNode memberIdNode &&
-					((TerminalNode) memberIdNode).getSymbol().getType() == NebulaLexer.ID)
-			{
-				// --- Member assignment (e.g. p1.name = ...) ---
-				// 1) Resolve the object's type (the thing before the dot)
-				Type targetObjectType = visit(lhsPostfix.primary());
-
-				if (targetObjectType instanceof ErrorType || targetObjectType.getClassSymbol() == null)
-				{
-					return ErrorType.INSTANCE; // error already reported
-				}
-
-				ClassSymbol owningClass = targetObjectType.getClassSymbol();
-				String memberName = memberIdNode.getText();
-
-				// 2) Resolve the member symbol inside the owning class
-				Optional<Symbol> memberOpt = owningClass.resolve(memberName);
-				if (memberOpt.isEmpty() || !(memberOpt.get() instanceof VariableSymbol memberSymbol))
-				{
-					logError(memberIdNode.getSymbol(), "Cannot find field or property '" + memberName + "' in type '" + owningClass.getName() + "'.");
-					return ErrorType.INSTANCE;
-				}
-
-				// 3.A Visibility: if member is private and caller is not the owning class --> error
-				if (!memberSymbol.isPublic() && owningClass != currentClass)
-				{
-					logError(memberIdNode.getSymbol(), "Cannot access private member '" + memberName + "' from outside its class.");
-					return ErrorType.INSTANCE;
-				}
-
-				// 3.B Const / immutability check
-				if (memberSymbol.isConst())
-				{
-					logError(memberIdNode.getSymbol(), "Cannot assign to constant field/property '" + memberName + "'.");
-					return ErrorType.INSTANCE;
-				}
-
-				// 3.C Property setter existence & accessibility
-				String setterName = "set_" + memberName;
-				List<MethodSymbol> setterCandidates = owningClass.resolveMethods(setterName)
-						.stream()
-						.filter(ms -> ms.getParameters().size() == 1)
-						.collect(Collectors.toList());
-
-				if (setterCandidates.isEmpty())
-				{
-					logError(memberIdNode.getSymbol(), "Cannot assign to read-only property '" + memberName + "'. Setter not defined.");
-					return ErrorType.INSTANCE;
-				}
-
-				// The setter must also be accessible (public) or be callable from the same class
-				boolean setterAccessible = setterCandidates.stream().anyMatch(ms -> ms.isPublic() || owningClass == currentClass);
-				if (!setterAccessible)
-				{
-					logError(memberIdNode.getSymbol(), "Cannot assign to property '" + memberName + "': setter is not accessible from here.");
-					return ErrorType.INSTANCE;
-				}
-
-				// 4) Link and return the member type
-				this.resolvedSymbols.put(memberIdNode, memberSymbol);
-				targetType = memberSymbol.getType();
-			}
-			else
-			{
-				// Not a direct .ID member pattern — fall back to general postfix visit.
-				targetType = visit(lhsPostfix);
-			}
-		}
-		else
-		{
-			// No postfix expression available — just visit the LHS normally.
-			targetType = visit(lhsRoot);
-		}
-
-		if (targetType instanceof ErrorType)
-		{
-			return ErrorType.INSTANCE;
-		}
-
-		// --- Final assignment type check ---
-		Type rhsType = visit(ctx.expression());
-		if (!rhsType.isAssignableTo(targetType))
-		{
-			logError(ctx.assignmentOperator().start, "Cannot assign '" + rhsType.getName() + "' to '" + targetType.getName() + "'.");
-			return ErrorType.INSTANCE;
-		}
-
-		return targetType;
-	}
-
 	/**
 	 * A helper to calculate a numeric "cost" for how well a method's parameters
 	 * match the provided arguments. Lower is better.
@@ -2869,5 +2818,43 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			// This happens if any part of the chain is null, meaning it's not a simple array initializer
 			return null;
 		}
+	}
+
+	private NebulaParser.PostfixExpressionContext findPostfix(ParseTree expr)
+	{
+		if (expr instanceof NebulaParser.PostfixExpressionContext p)
+		{
+			return p;
+		}
+		if (expr instanceof NebulaParser.UnaryExpressionContext u && u.postfixExpression() != null)
+		{
+			return u.postfixExpression();
+		}
+		// handle nested parenthesized expressions
+		if (expr instanceof NebulaParser.ExpressionContext e && e.getChildCount() == 1)
+		{
+			return findPostfix(e.getChild(0));
+		}
+		return null;
+	}
+
+	private boolean looksLikeMethodCall(NebulaParser.PostfixExpressionContext postfix)
+	{
+		int lastIndex = postfix.getChildCount() - 1;
+		return lastIndex >= 1 &&
+				postfix.getChild(lastIndex) instanceof TerminalNode paren &&
+				((TerminalNode) paren).getSymbol().getType() == NebulaLexer.R_PAREN_SYM;
+	}
+
+	private NebulaParser.ArgumentListContext extractArgumentList(NebulaParser.PostfixExpressionContext postfix)
+	{
+		for (ParseTree child : postfix.children)
+		{
+			if (child instanceof NebulaParser.ArgumentListContext args)
+			{
+				return args;
+			}
+		}
+		return null;
 	}
 }

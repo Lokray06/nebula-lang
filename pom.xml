@@ -102,6 +102,9 @@
                     <buildArgs>
                         <!-- Instruct GraalVM Native Image to load configurations from the 'graalvm-config' directory inside target/classes -->
                         <buildArg>-H:ConfigurationResourceRoots=${project.build.outputDirectory}/META-INF/native-image/org/lokray</buildArg>
+                        <buildArg>--report-unsupported-elements-at-runtime</buildArg>
+                        <buildArg>-H:MaximumInliningSize=10</buildArg>
+                        <buildArg>-Dgraal.PrintCompilation=true</buildArg>
                     </buildArgs>
                 </configuration>
             </plugin>

@@ -6,7 +6,6 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
-import org.antlr.v4.runtime.tree.Trees;
 import org.lokray.codegen.CodeGenerator;
 import org.lokray.ndk.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
@@ -260,7 +259,7 @@ public class Main
 
 		if (Debug.ENABLE_DEBUG)
 		{
-			Debug.logDebug("Parse Tree for " + file + ":\n" + Trees.toStringTree(tree, parser));
+			//Debug.logDebug("Parse Tree for " + file + ":\n" + Trees.toStringTree(tree, parser));
 		}
 		return tree;
 	}

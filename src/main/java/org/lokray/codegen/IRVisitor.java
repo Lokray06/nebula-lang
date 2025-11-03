@@ -1,6 +1,5 @@
 package org.lokray.codegen;
 
-import org.antlr.v4.runtime.tree.ParseTree;
 import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.PointerPointer;
 import org.bytedeco.llvm.LLVM.*;
@@ -148,98 +147,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		currentFunction = oldFunction;
 
 		return function;
-	}
-
-	@Override
-	public LLVMValueRef visitStatementExpression(NebulaParser.StatementExpressionContext ctx)
-	{
-		// The expression part of the statement, e.g., 'Console.println(...)'
-		ParseTree methodCallExpr = ctx.getChild(0);
-
-		Debug.logDebug("IR: Processing statement expression: " + ctx.getText());
-
-		// --- START MODIFICATION ---
-		// Directly look up the symbol associated with the *entire statement expression context*.
-		// This is where TypeCheckVisitor stores the result of overload resolution.
-		Debug.logDebug("IR: Attempting lookup using StatementExpression context: (" + ctx.getText() + ").");
-		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
-
-		if (symbolOpt.isPresent())
-		{
-			Debug.logDebug("IR: Lookup SUCCEEDED. Symbol found: " + symbolOpt.get());
-		}
-		else
-		{
-			Debug.logDebug("IR: Lookup FAILED. No symbol found for StatementExpression context.");
-		}
-		// --- END MODIFICATION ---
-
-
-		if (symbolOpt.isPresent() && symbolOpt.get() instanceof MethodSymbol methodSymbol)
-		{
-			// --- Symbol Found: Proceed with Call Generation ---
-			Debug.logDebug("IR: RESOLUTION SUCCESSFUL. Proceeding with code generation for method: " + methodSymbol); // Log the full symbol
-
-			String mangledName = methodSymbol.getMangledName();
-			Debug.logDebug("IR: Generated mangled name: " + mangledName);
-
-			// 1. Function Prototype/Definition Lookup
-			LLVMValueRef function = LLVMGetNamedFunction(module, mangledName);
-			LLVMTypeRef functionType;
-
-			// --- Always get/build the type from the MethodSymbol ---
-			List<Type> paramTypes = methodSymbol.getParameterTypes();
-			LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
-			for (int i = 0; i < paramTypes.size(); i++)
-			{
-				llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i));
-			}
-			LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType());
-			functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
-
-			// --- Only create the function if it doesn't exist ---
-			if (function == null)
-			{
-				Debug.logDebug("IR: Function prototype not found. Creating LLVM declaration for: " + mangledName);
-				function = LLVMAddFunction(module, mangledName, functionType);
-			}
-
-			// --- 2. Prepare arguments for the call ---
-			List<LLVMValueRef> args = new ArrayList<>();
-			if (ctx.argumentList() != null)
-			{
-				Debug.logDebug("IR: Processing " + ctx.argumentList().expression().size() + " arguments...");
-				for (NebulaParser.ExpressionContext exprCtx : ctx.argumentList().expression())
-				{
-					// This recursively calls visitLiteral and correctly generates the string pointer
-					args.add(visit(exprCtx));
-				}
-				Debug.logDebug("IR: Finished processing arguments.");
-			}
-
-			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
-			for (int i = 0; i < args.size(); i++)
-			{
-				argsPtr.put(i, args.get(i));
-			}
-
-			Debug.logWarning(getIRCode());
-
-			// --- 3. Build the call instruction ---
-			Debug.logDebug("IR: Building LLVM call instruction for: " + mangledName);
-
-			// *** FIX: Use the 'functionType' we saved from before ***
-			LLVMBuildCall2(builder, functionType, function, argsPtr, args.size(), "");
-			Debug.logDebug("IR: Call generation complete.");
-
-			return null; // A statement expression doesn't return a value.
-		}
-		else
-		{
-			Debug.logDebug("IR: WARNING: Not a method call, or resolved symbol not found/not a MethodSymbol for context: " + ctx.getText() + ". Falling back to visitChildren.");
-			// Fallback for other statement expressions (assignments, increments, etc.)
-			return visitChildren(ctx);
-		}
 	}
 
 	@Override
@@ -549,8 +456,6 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitForeachStatement(NebulaParser.ForeachStatementContext ctx)
 	{
-		System.out.println("=================================> Visiting foreach statement: " + ctx.getText());
-
 		// 1. Get loop variable info from semantic pass
 		Optional<Symbol> loopVarSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx.ID());
 		Optional<Type> loopVarNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.ID());
@@ -2097,9 +2002,20 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				" (Hash: " + ctx.hashCode() +
 				", Interval: " + ctx.getSourceInterval() + ")");
 
-		if (ctx.op != null)
-		{ // Check if there's a prefix operator
-			Debug.logDebug("IR (Unary): Operator '" + ctx.op.getText() + "' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+		// --- START FIX ---
+		// The grammar changed from a generic 'op' field to specific token methods.
+		if (ctx.ADD_OP() != null)
+		{
+			Debug.logDebug("IR (Unary): Operator '+' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+					" (Hash: " + ctx.unaryExpression().hashCode() +
+					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+			LLVMValueRef operand = visit(ctx.unaryExpression());
+			return operand; // Unary plus is a no-op
+		}
+
+		if (ctx.SUB_OP() != null)
+		{
+			Debug.logDebug("IR (Unary): Operator '-' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
 					" (Hash: " + ctx.unaryExpression().hashCode() +
 					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
 			LLVMValueRef operand = visit(ctx.unaryExpression());
@@ -2107,57 +2023,96 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			{
 				return null;
 			}
-
-			switch (ctx.op.getType())
+			LLVMTypeRef type = LLVMTypeOf(operand);
+			if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind)
 			{
-				case NebulaParser.ADD_OP:
-					return operand; // Unary plus is usually a no-op
-				case NebulaParser.SUB_OP:
-					LLVMTypeRef type = LLVMTypeOf(operand);
-					if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind)
-					{
-						return LLVMBuildNeg(builder, operand, "neg_tmp");
-					}
-					else if (LLVMGetTypeKind(type) == LLVMFloatTypeKind || LLVMGetTypeKind(type) == LLVMDoubleTypeKind)
-					{
-						return LLVMBuildFNeg(builder, operand, "fneg_tmp");
-					}
-					else
-					{
-						Debug.logError("IR: Unary minus applied to non-numeric type: " + ctx.getText());
-						return null;
-					}
-				case NebulaParser.LOG_NOT_OP:
-					// Convert operand to boolean (i1) if it isn't already
-					LLVMValueRef boolOperand = TypeConverter.toBoolean(operand, null, builder); // Simplified context passing for now
-					// XOR with true (1) to negate
-					LLVMValueRef one = LLVMConstAllOnes(LLVMTypeOf(boolOperand)); // produces all-ones of same type (i1 -> true)
-					return LLVMBuildXor(builder, boolOperand, one, "lognot_tmp");
-				case NebulaParser.BIT_NOT_OP:
-					if (LLVMGetTypeKind(LLVMTypeOf(operand)) == LLVMIntegerTypeKind)
-					{
-						// LLVM's bitwise not is XOR with -1 (all bits set)
-						LLVMValueRef minusOne = LLVMConstAllOnes(LLVMTypeOf(operand));
-						return LLVMBuildXor(builder, operand, minusOne, "bitnot_tmp");
-					}
-					else
-					{
-						Debug.logError("IR: Bitwise NOT applied to non-integer type: " + ctx.getText());
-						return null;
-					}
-				case NebulaParser.INC_OP: // Pre-increment
-				case NebulaParser.DEC_OP: // Pre-decrement
-					// These require finding the variable's alloca, loading, incrementing/decrementing, storing back, and returning the *new* value.
-					// This logic is more complex and depends on the operand being a valid l-value (variable/field).
-					// For now, let's skip implementation and log a warning.
-					Debug.logWarning("IR: Pre-increment/decrement not yet fully implemented in IRVisitor for: " + ctx.getText());
-					return operand; // Placeholder
-				default:
-					Debug.logError("IR: Unknown unary operator: " + ctx.op.getText());
-					return null;
+				return LLVMBuildNeg(builder, operand, "neg_tmp");
+			}
+			else if (LLVMGetTypeKind(type) == LLVMFloatTypeKind || LLVMGetTypeKind(type) == LLVMDoubleTypeKind)
+			{
+				return LLVMBuildFNeg(builder, operand, "fneg_tmp");
+			}
+			else
+			{
+				Debug.logError("IR: Unary minus applied to non-numeric type: " + ctx.getText());
+				return null;
 			}
 		}
-		else if (ctx.castExpression() != null)
+
+		if (ctx.LOG_NOT_OP() != null)
+		{
+			Debug.logDebug("IR (Unary): Operator '!' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+					" (Hash: " + ctx.unaryExpression().hashCode() +
+					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+			LLVMValueRef operand = visit(ctx.unaryExpression());
+			if (operand == null)
+			{
+				return null;
+			}
+			// Convert operand to boolean (i1) if it isn't already
+			LLVMValueRef boolOperand = TypeConverter.toBoolean(operand, null, builder); // Simplified context passing for now
+			// XOR with true (1) to negate
+			LLVMValueRef one = LLVMConstAllOnes(LLVMTypeOf(boolOperand)); // produces all-ones of same type (i1 -> true)
+			return LLVMBuildXor(builder, boolOperand, one, "lognot_tmp");
+		}
+
+		if (ctx.BIT_NOT_OP() != null)
+		{
+			Debug.logDebug("IR (Unary): Operator '~' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+					" (Hash: " + ctx.unaryExpression().hashCode() +
+					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+			LLVMValueRef operand = visit(ctx.unaryExpression());
+			if (operand == null)
+			{
+				return null;
+			}
+			if (LLVMGetTypeKind(LLVMTypeOf(operand)) == LLVMIntegerTypeKind)
+			{
+				// LLVM's bitwise not is XOR with -1 (all bits set)
+				LLVMValueRef minusOne = LLVMConstAllOnes(LLVMTypeOf(operand));
+				return LLVMBuildXor(builder, operand, minusOne, "bitnot_tmp");
+			}
+			else
+			{
+				Debug.logError("IR: Bitwise NOT applied to non-integer type: " + ctx.getText());
+				return null;
+			}
+		}
+
+		if (ctx.INC_OP() != null) // Pre-increment
+		{
+			Debug.logDebug("IR (Unary): Operator '++' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+					" (Hash: " + ctx.unaryExpression().hashCode() +
+					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+			LLVMValueRef operand = visit(ctx.unaryExpression());
+			if (operand == null)
+			{
+				return null;
+			}
+			// These require finding the variable's alloca, loading, incrementing/decrementing, storing back, and returning the *new* value.
+			// This logic is more complex and depends on the operand being a valid l-value (variable/field).
+			// For now, let's skip implementation and log a warning.
+			Debug.logWarning("IR: Pre-increment/decrement not yet fully implemented in IRVisitor for: " + ctx.getText());
+			return operand; // Placeholder
+		}
+
+		if (ctx.DEC_OP() != null) // Pre-decrement
+		{
+			Debug.logDebug("IR (Unary): Operator '--' present. Visiting nested UnaryExpression: " + ctx.unaryExpression().getText() +
+					" (Hash: " + ctx.unaryExpression().hashCode() +
+					", Interval: " + ctx.unaryExpression().getSourceInterval() + ")");
+			LLVMValueRef operand = visit(ctx.unaryExpression());
+			if (operand == null)
+			{
+				return null;
+			}
+			Debug.logWarning("IR: Pre-increment/decrement not yet fully implemented in IRVisitor for: " + ctx.getText());
+			return operand; // Placeholder
+		}
+		// --- END FIX ---
+
+		// No prefix operator, must be cast or postfix
+		if (ctx.castExpression() != null)
 		{
 			Debug.logDebug("IR (Unary): Visiting CastExpression child: " + ctx.castExpression().getText() +
 					" (Hash: " + ctx.castExpression().hashCode() +
@@ -2171,6 +2126,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 					", Interval: " + ctx.postfixExpression().getSourceInterval() + ")");
 			return visit(ctx.postfixExpression());
 		}
+
 		// Should not happen based on grammar
 		return null;
 	}

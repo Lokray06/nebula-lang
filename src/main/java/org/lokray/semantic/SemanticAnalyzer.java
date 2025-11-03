@@ -90,29 +90,26 @@ public class SemanticAnalyzer
 
 	public boolean analyze(ParseTree tree)
 	{
-		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members.
-		Debug.logDebug("\nSymbol resolution (Types, imports and aliases, and members and fields definition):");
-		SymbolTableBuilder defVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
+		// Pass 1 & 2: Discover all types, handle imports/aliases, and define all members
+		// This must be done in two passes, just like the library build.
 
-		// Debugging
-		Debug.logDebug("  Resolved types:");
-		for (ClassSymbol type : declaredClasses.values())
+		// Pass 1: Discover all types in this tree
+		Debug.logDebug("\nSymbol resolution (Pass 1: Discovery)...");
+		SymbolTableBuilder discoveryVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, true);
+		discoveryVisitor.visit(tree);
+
+		this.hasErrors = discoveryVisitor.hasErrors();
+		if (hasErrors)
 		{
-			Debug.logDebug("    -" + type.getName());
-			// Print here all the methods defined in the class
-			// Iterate over the lists of overloads (Map values)
-			for (List<MethodSymbol> overloads : type.getMethodsByName().values())
-			{
-				for (MethodSymbol method : overloads)
-				{
-
-					Debug.logDebug("        - Method: " + method);
-				}
-			}
+			return false;
 		}
-		defVisitor.visit(tree);
 
-		this.hasErrors = defVisitor.hasErrors();
+		// Pass 2: Define members
+		Debug.logDebug("\nSymbol resolution (Pass 2: Member Definition)...");
+		SymbolTableBuilder memberVisitor = new SymbolTableBuilder(globalScope, declaredClasses, errorHandler, false);
+		memberVisitor.visit(tree);
+
+		this.hasErrors = memberVisitor.hasErrors();
 		if (hasErrors)
 		{
 			return false;
