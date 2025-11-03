@@ -1690,6 +1690,172 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	}
 
 	@Override
+	public LLVMValueRef visitAssignmentExpression(NebulaParser.AssignmentExpressionContext ctx)
+	{
+		// 1. Handle Pass-Through Case (not an assignment, e.g., just "a + b")
+		if (ctx.assignmentOperator() == null)
+		{
+			return visit(ctx.conditionalExpression(0));
+		}
+
+		// 2. This is an assignment (LHS op= RHS)
+		NebulaParser.ConditionalExpressionContext lhsCtx = ctx.conditionalExpression(0);
+		NebulaParser.ConditionalExpressionContext rhsCtx = ctx.conditionalExpression(1);
+
+		// 3. Get the L-Value (pointer) for the LHS
+		LLVMValueRef lhsPointer = null;
+		Type lhsNebulaType = null; // This will be the type of the *element* (e.g., int)
+
+		// --- Find the LHS Pointer (L-Value) ---
+		// We need the *address* (alloca or GEP result), not the value.
+		// We must manually check for the simple variable case, because the default
+		// visitPrimary(Source 3679) returns a *loaded value* (R-Value), which we can't assign to.
+
+		String lhsText = lhsCtx.getText();
+		// We check the *primary* context that the semantic analyzer associated with this expression
+		Optional<Symbol> lhsSymOpt = semanticAnalyzer.getResolvedSymbol(lhsCtx);
+
+		// Check if the resolved symbol for the *whole expression* is a simple variable
+		if (lhsSymOpt.isPresent() && lhsSymOpt.get() instanceof VariableSymbol varSym && varSym.getName().equals(lhsText))
+		{
+			// Case 1: LHS is a simple ID (e.g., "a = ...")
+			lhsPointer = lookupVariable(varSym.getName()); // Find the alloca
+			lhsNebulaType = varSym.getType();
+			Debug.logDebug("IR (Assign): LHS is simple variable '" + varSym.getName() + "'.");
+		}
+		else
+		{
+			// Case 2: LHS is a complex expression (e.g., "a[i] = ..." or "obj.field = ...")
+			// We visit the LHS expression, *expecting* it to return a pointer (GEP result).
+			// This relies on visitPostfixExpression (for array access ) working correctly.
+			// Note: Field access (obj.field) is not implemented in your provided visitPostfixExpression.
+			Debug.logDebug("IR (Assign): LHS is complex expression '" + lhsText + "'. Visiting to get pointer.");
+			lhsPointer = visit(lhsCtx);
+
+			// For complex L-Values (like a[i]), the *resolved type* of the expression
+			// is the type of the element itself (e.g., int for a[i]).
+			Optional<Type> typeOpt = semanticAnalyzer.getResolvedType(lhsCtx);
+			if (typeOpt.isPresent())
+			{
+				lhsNebulaType = typeOpt.get();
+			}
+		}
+
+		// 4. Validate the LHS pointer
+		if (lhsPointer == null)
+		{
+			Debug.logError("IR Error: Could not resolve LHS of assignment to a memory location: " + lhsCtx.getText());
+			return null;
+		}
+		if (LLVMGetTypeKind(LLVMTypeOf(lhsPointer)) != LLVMPointerTypeKind)
+		{
+			Debug.logError("IR Error: Cannot assign to a non-variable (R-Value): " + lhsCtx.getText());
+			return null;
+		}
+		if (lhsNebulaType == null)
+		{
+			Debug.logError("IR Error: Could not determine semantic type of LHS: " + lhsCtx.getText());
+			return null;
+		}
+
+		// 5. Get the LLVM type of the element we're storing into (e.g., i32 from i32*)
+		LLVMTypeRef targetLLVMType = LLVMGetElementType(LLVMTypeOf(lhsPointer));
+
+		// 6. Get the RHS value
+		LLVMValueRef rhsValue = visit(rhsCtx);
+		if (rhsValue == null)
+		{
+			Debug.logError("IR Error: Could not generate code for RHS of assignment: " + rhsCtx.getText());
+			return null;
+		}
+
+		// 7. Cast RHS value to match the LHS type
+		LLVMValueRef castedRhsValue = buildCast(builder, rhsValue, targetLLVMType, "assign_cast");
+
+		// 8. Handle compound assignment (+=, -=, etc.)
+		String op = ctx.assignmentOperator().getText();
+		LLVMValueRef finalValueToStore;
+
+		if (op.equals("="))
+		{
+			finalValueToStore = castedRhsValue;
+		}
+		else
+		{
+			// It's compound, so we need the *current* value from the LHS
+			LLVMValueRef currentValue = LLVMBuildLoad2(builder, targetLLVMType, lhsPointer, "load_for_compound");
+
+			boolean isFloat = (LLVMGetTypeKind(targetLLVMType) == LLVMFloatTypeKind || LLVMGetTypeKind(targetLLVMType) == LLVMDoubleTypeKind);
+			// Use the *semantic* type to determine signedness, not the LLVM type
+			boolean isUnsigned = lhsNebulaType.getName().startsWith("u");
+
+			switch (op)
+			{
+				case "+=":
+					finalValueToStore = isFloat ? LLVMBuildFAdd(builder, currentValue, castedRhsValue, "fadd_compound")
+							: LLVMBuildAdd(builder, currentValue, castedRhsValue, "add_compound");
+					break;
+				case "-=":
+					finalValueToStore = isFloat ? LLVMBuildFSub(builder, currentValue, castedRhsValue, "fsub_compound")
+							: LLVMBuildSub(builder, currentValue, castedRhsValue, "sub_compound");
+					break;
+				case "*=":
+					finalValueToStore = isFloat ? LLVMBuildFMul(builder, currentValue, castedRhsValue, "fmul_compound")
+							: LLVMBuildMul(builder, currentValue, castedRhsValue, "mul_compound");
+					break;
+				case "/=":
+					if (isFloat)
+					{
+						finalValueToStore = LLVMBuildFDiv(builder, currentValue, castedRhsValue, "fdiv_compound");
+					}
+					else
+					{
+						finalValueToStore = isUnsigned ? LLVMBuildUDiv(builder, currentValue, castedRhsValue, "udiv_compound")
+								: LLVMBuildSDiv(builder, currentValue, castedRhsValue, "sdiv_compound");
+					}
+					break;
+				case "%=":
+					if (isFloat)
+					{
+						finalValueToStore = LLVMBuildFRem(builder, currentValue, castedRhsValue, "frem_compound");
+					}
+					else
+					{
+						finalValueToStore = isUnsigned ? LLVMBuildURem(builder, currentValue, castedRhsValue, "urem_compound")
+								: LLVMBuildSRem(builder, currentValue, castedRhsValue, "srem_compound");
+					}
+					break;
+				// Bitwise operators (only for integers)
+				case "&=":
+					finalValueToStore = LLVMBuildAnd(builder, currentValue, castedRhsValue, "and_compound");
+					break;
+				case "|=":
+					finalValueToStore = LLVMBuildOr(builder, currentValue, castedRhsValue, "or_compound");
+					break;
+				case "^=":
+					finalValueToStore = LLVMBuildXor(builder, currentValue, castedRhsValue, "xor_compound");
+					break;
+				case "<<=":
+					finalValueToStore = LLVMBuildShl(builder, currentValue, castedRhsValue, "shl_compound");
+					break;
+				case ">>=":
+					finalValueToStore = isUnsigned ? LLVMBuildLShr(builder, currentValue, castedRhsValue, "lshr_compound")
+							: LLVMBuildAShr(builder, currentValue, castedRhsValue, "ashr_compound");
+					break;
+				default:
+					Debug.logError("IR Error: Unimplemented assignment operator: " + op);
+					return null;
+			}
+		}
+
+		// 9. Store the final value
+		LLVMBuildStore(builder, finalValueToStore, lhsPointer);
+
+		// 10. Assignment expressions return the stored value
+		return finalValueToStore;
+	}
+
+	@Override
 	public LLVMValueRef visitMultiplicativeExpression(NebulaParser.MultiplicativeExpressionContext ctx)
 	{
 		Debug.logDebug("IR (Multiplicative): Visiting: " + ctx.getText() +
