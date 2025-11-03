@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Validate File" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="org.lokray.Main" />
+    <module name="nebulac" />
+    <option name="PROGRAM_PARAMETERS" value="-k $PROJECT_DIR$/../../nebula/tests/Arrays.neb -l $PROJECT_DIR$/../../nebula/ndk.neblib" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

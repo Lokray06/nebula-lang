@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Compile file verbose" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="org.lokray.Main" />
+    <module name="nebulac" />
+    <option name="PROGRAM_PARAMETERS" value="-v $PROJECT_DIR$/../../nebula/tests/HelloWorld.neb -l $PROJECT_DIR$/../../nebula/ndk.neblib" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

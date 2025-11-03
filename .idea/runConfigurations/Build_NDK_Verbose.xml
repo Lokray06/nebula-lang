@@ -1,0 +1,10 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Build NDK Verbose" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="org.lokray.Main" />
+    <module name="nebulac" />
+    <option name="PROGRAM_PARAMETERS" value="-B -v -o $PROJECT_DIR$/../../nebula/ndk.neblib $PROJECT_DIR$/../../nebula/ndk/core/Array.neb $PROJECT_DIR$/../../nebula/ndk/core/io/Console.neb $PROJECT_DIR$/../../nebula/ndk/core/Math.neb $PROJECT_DIR$/../../nebula/ndk/core/Object.neb $PROJECT_DIR$/../../nebula/ndk/core/Primitives.neb $PROJECT_DIR$/../../nebula/ndk/core/String.neb -n $PROJECT_DIR$/../../nebula/ndk/native/core/io/Console.cpp $PROJECT_DIR$/../../nebula/ndk/native/core/Primitives.cpp $PROJECT_DIR$/../../nebula/ndk/native/core/String.cpp" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
