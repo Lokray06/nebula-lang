@@ -50,6 +50,12 @@ public class Main
 				throw new IllegalArgumentException("No input files provided. Use -h for help.");
 			}
 
+			if (!validatePaths(arguments))
+			{
+				Debug.logError("Path validation failed. Aborting.");
+				return;
+			}
+
 			ErrorHandler errorHandler = new ErrorHandler();
 
 			// --- Build Pipeline ---
@@ -381,5 +387,76 @@ public class Main
 		// Default: derive from input file
 		String baseName = inputFile.getFileName().toString().replaceFirst("[.][^.]+$", "");
 		return inputFile.resolveSibling(baseName + newExtension);
+	}
+
+	private static boolean validatePaths(CompilerArguments args)
+	{
+		boolean valid = true;
+
+		// --- Input Files ---
+		for (Path input : args.getInputFiles())
+		{
+			if (!Files.exists(input))
+			{
+				Debug.logError("Input file not found: " + input);
+				valid = false;
+			}
+		}
+
+		// --- Library Files (.neblib or .a/.so) ---
+		for (Path lib : args.getLibraryFiles())
+		{
+			if (!Files.exists(lib))
+			{
+				Debug.logError("Library file not found: " + lib);
+				valid = false;
+			}
+		}
+
+		// --- Library Search Paths ---
+		for (Path libDir : args.getLibrarySearchPaths())
+		{
+			if (!Files.exists(libDir))
+			{
+				Debug.logError("Library search path does not exist: " + libDir);
+				valid = false;
+			}
+			else if (!Files.isDirectory(libDir))
+			{
+				Debug.logError("Library search path is not a directory: " + libDir);
+				valid = false;
+			}
+		}
+
+		// --- Native Sources ---
+		for (Path nativeSrc : args.getNativeSourceFiles())
+		{
+			if (!Files.exists(nativeSrc))
+			{
+				Debug.logError("Native source file not found: " + nativeSrc);
+				valid = false;
+			}
+		}
+
+		// --- Output Directory ---
+		if (args.getOutputPath() != null)
+		{
+			Path outDir = args.getOutputPath().getParent();
+			if (outDir != null && !Files.exists(outDir))
+			{
+				try
+				{
+					Files.createDirectories(outDir);
+					Debug.logInfo("Created output directory: " + outDir);
+				}
+				catch (IOException e)
+				{
+					Debug.logError("Failed to create output directory: " + outDir + " (" + e.getMessage() + ")");
+					valid = false;
+				}
+			}
+		}
+
+		return valid;
 	}
 }
