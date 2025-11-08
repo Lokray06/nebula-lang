@@ -46,12 +46,4 @@ public class Debug
 		System.err.println(ANSI_RED + log + ANSI_RESET);
 	}
 
-	public static void printUsage(String[] invalidArgs)
-	{
-		System.err.println("Invalid arguments: " + Arrays.toString(invalidArgs));
-		System.err.println("Usage:");
-		System.err.println("    -> nebula /path/to/nebula/file.neb [" + IGNORE_EXTENSIONS_FLAG + "]");
-		System.err.println("    or");
-		System.err.println("    -> nebula [" + IGNORE_EXTENSIONS_FLAG + "] /path/to/nebula/file.neb");
-	}
 }

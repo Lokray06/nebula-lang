@@ -219,7 +219,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			{
 				ClassSymbol classSymbol = new ClassSymbol(typeName, currentScope, isNative, isPublic);
 				String fqn = getFqn(ctx);
-				Debug.logWarning("Resolved FQN for type '" + typeName + "' -> " + fqn);
 				declaredClasses.put(fqn, classSymbol);
 				currentScope.define(classSymbol);
 				Debug.logDebug("Defined " + (isNative ? "native " : "") + "class " + classSymbol.getName());
@@ -229,7 +228,6 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			{
 				StructSymbol structSymbol = new StructSymbol(typeName, currentScope, isPublic, isNative);
 				String fqn = getFqn(ctx);
-				Debug.logWarning("Resolved FQN for type '" + typeName + "' -> " + fqn);
 				declaredClasses.put(fqn, structSymbol);
 				currentScope.define(structSymbol);
 				Debug.logDebug("Defined " + (isNative ? "native " : "") + "struct " + structSymbol.getName());

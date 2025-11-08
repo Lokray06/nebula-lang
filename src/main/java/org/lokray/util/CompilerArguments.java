@@ -54,12 +54,12 @@ public class CompilerArguments
 					parsedArgs.helpFlag = true;
 					return parsedArgs; // Help flag overrides all else
 				}
-				if (arg.equals("--version"))
-				{ // Changed: -v is now --verbose
+				if (arg.equals("-v") || arg.equals("--version"))
+				{ // Changed: -v is now --version
 					parsedArgs.versionFlag = true;
 					return parsedArgs; // Version flag overrides all else
 				}
-				if (arg.equals("-v") || arg.equals("--verbose"))
+				if (arg.equals("--verbose"))
 				{ // Added
 					parsedArgs.verboseFlag = true;
 					Debug.ENABLE_DEBUG = true; // Set debug flag immediately
@@ -162,11 +162,11 @@ public class CompilerArguments
 	public static void printUsage()
 	{
 		System.out.println("OVERVIEW: Compiler for the Nebula language.");
-		System.out.println("\nUSAGE: nebulac [options] file...");
+		System.out.println("\nUSAGE: nebc [options] file...");
 		System.out.println("\nOPTIONS:");
 		System.out.println("  -h, --help                Show this help message and exit.");
-		System.out.println("  --version                 Show compiler version and exit.");
-		System.out.println("  -v, --verbose             Enable verbose debug logging."); // Added
+		System.out.println("  -v, --version                 Show compiler version and exit.");
+		System.out.println("  --verbose             Enable verbose debug logging."); // Added
 		System.out.println("  -e, --entry <class.name>  Specify the entry point class for an executable.");
 		System.out.println("  -o, --output <file>       Specify the output file name.");
 		System.out.println("  -L <path>                 Add a directory to the library search path.");

@@ -37,34 +37,40 @@ public class CodeGenerator
 		this.outputPath = outputPath;
 	}
 
-	public void generate() throws IOException
-	{
-		// 1. Initialize IRVisitor
-		IRVisitor visitor = new IRVisitor(semanticAnalyzer);
+    public void generate() throws IOException
+    {
+        // 1. Initialize IRVisitor
+        IRVisitor visitor = new IRVisitor(semanticAnalyzer);
 
-		// 2. Run the visitor to populate the module
-		for (ParseTree tree : trees) // 🚀 CHANGE: Loop over all trees
-		{
-			visitor.visit(tree);
-		}
+        // 2. Run the visitor to populate the module
+        for (ParseTree tree : trees)
+        {
+            visitor.visit(tree);
+        }
 
-		// 3. Retrieve the generated module
-		LLVMModuleRef module = visitor.getModule();
+        // 3. Retrieve the generated module
+        LLVMModuleRef module = visitor.getModule();
 
-		// 4. Print the generated LLVM IR to a file
-		String outputFilename = outputPath.toString();
+        // 4. Prepare the output path
+        String outputFilename = outputPath.toString();
 
-		// Note: The BytePointer argument here is for an optional error message, which we discard.
-		if (LLVMPrintModuleToFile(module, outputFilename, new BytePointer((Pointer) null)) != 0)
-		{
-			Debug.logError("Error writing LLVM IR to file.");
-		}
-		else
-		{
-			Debug.logDebug("LLVM IR written to " + outputFilename);
-		}
+        // ✅ Ensure parent directory exists before writing
+        if (outputPath.getParent() != null)
+        {
+            java.nio.file.Files.createDirectories(outputPath.getParent());
+        }
 
-		// 5. Clean up the module now that we are done with it
-		LLVMDisposeModule(module);
-	}
+        // 5. Write the LLVM IR to file
+        if (LLVMPrintModuleToFile(module, outputFilename, new BytePointer((Pointer) null)) != 0)
+        {
+            Debug.logError("Error writing LLVM IR to file: " + outputFilename);
+        }
+        else
+        {
+            Debug.logDebug("LLVM IR written to " + outputFilename);
+        }
+
+        // 6. Clean up the module
+        LLVMDisposeModule(module);
+    }
 }
