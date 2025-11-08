@@ -1458,6 +1458,52 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				currentType = callType;
 				currentSymbol = resolvedMethod;
 			}
+            else if (operator.getText().equals("["))
+            {
+                // This is an array access, e.g., arr[i]
+
+                // 1. Check if the current type is an array
+                if (!(currentType instanceof ArrayType arrayType)) {
+                    errorHandler.logError(ctx.start, "Cannot apply indexing with [] to a non-array type '" + currentType.getName() + "'.", currentClass);
+                    return ErrorType.INSTANCE;
+                }
+
+                i++; // Move to the index expression
+                if (i >= ctx.getChildCount() || !(ctx.getChild(i) instanceof NebulaParser.ExpressionContext)) {
+                    // Should be caught by parser
+                    return ErrorType.INSTANCE;
+                }
+
+                // 2. Visit the index expression and check if it's an integer
+
+                // --- START FIX ---
+                // Get the canonical 'int' type from the global scope
+                Type intType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE);
+
+                // Visit the index expression, EXPLICITLY EXPECTING an 'int'
+                Type indexType = visitExpecting(ctx.getChild(i), intType);
+                // --- END FIX ---
+
+                if (!indexType.isInteger()) {
+                    errorHandler.logError(((NebulaParser.ExpressionContext)ctx.getChild(i)).start, "Array index must be an integer, but found '" + indexType.getName() + "'.", currentClass);
+                }
+
+                i++; // Move past the expression
+
+                if (i >= ctx.getChildCount() || !ctx.getChild(i).getText().equals("]"))
+                {
+                    // Should be caught by parser
+                    return ErrorType.INSTANCE;
+                }
+
+                // 3. The type of the *entire expression* (e.g., arr[i]) is now the element type
+                currentType = arrayType.getElementType();
+
+                // 4. An element itself isn't a symbol, so we clear it.
+                // This is correct because the *type* is what matters for the next
+                // part of the chain (e.g., arr[i].someMethod()).
+                currentSymbol = null;
+            }
 
 			i++;
 		}

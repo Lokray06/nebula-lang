@@ -39,7 +39,8 @@ public class CodeGenerator
 
     public void generate() throws IOException
     {
-        // 1. Initialize IRVisitor
+        // 1. Initialize TypeConverter and IRVisitor
+        TypeConverter.init();
         IRVisitor visitor = new IRVisitor(semanticAnalyzer);
 
         // 2. Run the visitor to populate the module

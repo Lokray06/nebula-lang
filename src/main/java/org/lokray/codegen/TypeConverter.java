@@ -20,6 +20,11 @@ public class TypeConverter
 	private static final AtomicReference<LLVMTypeRef> globalStringStruct = new AtomicReference<>();
 	private static final AtomicReference<LLVMTypeRef> globalArrayDescStruct = new AtomicReference<>();
 
+    static void init()
+    {
+        getArrayDescStructType();
+        getArrayDescStructType();
+    }
 
 	// Create or reuse nebula_string struct
 	public static LLVMTypeRef getStringStructType()

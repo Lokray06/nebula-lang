@@ -393,8 +393,8 @@ public class PrimitiveType implements Type
 	{
 		return switch (this.name)
 		{
-			case "sbyte", "int8" -> Optional.of(MIN_SBYTE);
-			case "short", "int16" -> Optional.of(MIN_SHORT);
+            case "sbyte", "int8", "char" -> Optional.of(MIN_SBYTE);
+            case "short", "int16" -> Optional.of(MIN_SHORT);
 			case "int", "int32" -> Optional.of(MIN_INT);
 			case "long", "int64" -> Optional.of(MIN_LONG);
 			case "byte", "uint8" -> Optional.of(MIN_BYTE);
@@ -410,8 +410,8 @@ public class PrimitiveType implements Type
 	{
 		return switch (this.name)
 		{
-			case "sbyte", "int8" -> Optional.of(MAX_SBYTE);
-			case "short", "int16" -> Optional.of(MAX_SHORT);
+            case "sbyte", "int8", "char" -> Optional.of(MAX_SBYTE);
+            case "short", "int16" -> Optional.of(MAX_SHORT);
 			case "int", "int32" -> Optional.of(MAX_INT);
 			case "long", "int64" -> Optional.of(MAX_LONG);
 			case "byte", "uint8" -> Optional.of(MAX_BYTE);

@@ -6,6 +6,7 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.Trees;
 import org.lokray.codegen.CodeGenerator;
 import org.lokray.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
@@ -266,15 +267,16 @@ public class Main
 		parser.addErrorListener(new SyntaxErrorListener());
 
 		ParseTree tree = parser.compilationUnit();
+        // Debug the AST
+        if (Debug.ENABLE_DEBUG)
+		{
+			Debug.logDebug("Parse Tree for " + file + ":\n" + Trees.toStringTree(tree, parser));
+		}
+
 		if (parser.getNumberOfSyntaxErrors() > 0)
 		{
 			Debug.logError("Compilation failed due to syntax errors in " + file);
 			return null;
-		}
-
-		if (Debug.ENABLE_DEBUG)
-		{
-			//Debug.logDebug("Parse Tree for " + file + ":\n" + Trees.toStringTree(tree, parser));
 		}
 		return tree;
 	}
