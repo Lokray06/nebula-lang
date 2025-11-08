@@ -1,4 +1,4 @@
-package org.lokray.ndk.dto;
+package org.lokray.dto;
 
 import java.util.ArrayList;
 import java.util.List;

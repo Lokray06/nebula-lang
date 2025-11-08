@@ -1,7 +1,7 @@
 // File: src/main/java/org/lokray/util/SymbolDTOConverter.java
 package org.lokray.util;
 
-import org.lokray.ndk.dto.*;
+import org.lokray.dto.*;
 import org.lokray.semantic.symbol.*;
 
 import java.util.ArrayList;

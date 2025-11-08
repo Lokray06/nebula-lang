@@ -1,9 +1,9 @@
-package org.lokray.ndk.dto;
+package org.lokray.dto;
 
 import java.util.ArrayList;
 import java.util.List;
 
-public class StructDTO
+public class ClassDTO
 {
 	public String name;
 	public boolean isNative = false;

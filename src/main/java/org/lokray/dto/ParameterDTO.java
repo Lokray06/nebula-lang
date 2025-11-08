@@ -1,5 +1,5 @@
 // File: org.lokray.ndk.dto.ParameterDTO.java (Assumption)
-package org.lokray.ndk.dto;
+package org.lokray.dto;
 
 public class ParameterDTO
 {

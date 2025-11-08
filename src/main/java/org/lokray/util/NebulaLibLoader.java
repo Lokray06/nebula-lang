@@ -2,7 +2,7 @@ package org.lokray.util;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import org.lokray.ndk.dto.*;
+import org.lokray.dto.*;
 import org.lokray.semantic.symbol.*;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;

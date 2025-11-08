@@ -7,7 +7,7 @@ import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.codegen.CodeGenerator;
-import org.lokray.ndk.dto.LibraryDTO;
+import org.lokray.dto.LibraryDTO;
 import org.lokray.parser.NebulaLexer;
 import org.lokray.parser.NebulaParser;
 import org.lokray.semantic.SemanticAnalyzer;

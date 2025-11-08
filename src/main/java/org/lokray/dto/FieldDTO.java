@@ -1,4 +1,4 @@
-package org.lokray.ndk.dto;
+package org.lokray.dto;
 
 public class FieldDTO
 {
