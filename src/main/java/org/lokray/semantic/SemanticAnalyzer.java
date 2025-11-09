@@ -3,10 +3,7 @@ package org.lokray.semantic;
 import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.semantic.symbol.*;
-import org.lokray.semantic.type.ArrayType;
-import org.lokray.semantic.type.PrimitiveType;
-import org.lokray.semantic.type.Type;
-import org.lokray.semantic.type.UnresolvedType;
+import org.lokray.semantic.type.*;
 import org.lokray.util.BuiltInTypeLoader;
 import org.lokray.util.Debug;
 import org.lokray.util.ErrorHandler;
@@ -66,6 +63,7 @@ public class SemanticAnalyzer
 	public void finalizeSymbolTable()
 	{
 		linkNdkSymbols();
+		linkSuperclasses();
 		linkIntrinsicsToNdkStructs();
 		linkArrayTypeToBackingStruct();
 		autoImportNebulaCore(globalScope);
@@ -455,6 +453,32 @@ public class SemanticAnalyzer
 		else
 		{
 			Debug.logWarning("  -> FAILED to link ArrayType. 'nebula.core.Array' not found or is not a StructSymbol.");
+		}
+	}
+
+	private void linkSuperclasses()
+	{
+		Debug.logDebug("Linking superclasses...");
+		// 1. Find the canonical 'Object' symbol from the NDK
+		ClassSymbol objectSymbol = declaredClasses.get("nebula.core.Object");
+		if (objectSymbol == null)
+		{
+			// This can happen if ndk.neblib isn't loaded, which is fine for the NDK build itself.
+			Debug.logWarning("  -> 'nebula.core.Object' not found. Skipping superclass linking.");
+			return;
+		}
+
+		// 2. Iterate all *other* classes
+		for (ClassSymbol cs : declaredClasses.values())
+		{
+			// Don't link Object to itself.
+			// Only link classes (which are not StructSymbols)
+			if (cs != objectSymbol && cs.getSuperClass() == null && !(cs instanceof StructSymbol))
+			{
+				// If it doesn't have a superclass, set it to Object
+				cs.setSuperClass(objectSymbol);
+				Debug.logDebug("  -> Set " + cs.getFqn() + " superclass to nebula.core.Object");
+			}
 		}
 	}
 }

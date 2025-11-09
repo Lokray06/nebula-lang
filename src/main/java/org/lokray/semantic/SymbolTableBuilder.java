@@ -362,55 +362,56 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		}
 	}
 
-    @Override
-    public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
-    {
-        if (currentClass == null)
-        {
-            errorHandler.logError(ctx.ID().getSymbol(), "Method defined outside of a class.", currentClass);
-            return null;
-        }
-        Type returnType = resolveTypeFromCtx(ctx.type());
+	@Override
+	public Void visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
+			errorHandler.logError(ctx.ID().getSymbol(), "Method defined outside of a class.", currentClass);
+			return null;
+		}
+		Type returnType = resolveTypeFromCtx(ctx.type());
 
-        // Build a list of ParameterSymbol
-        List<ParameterSymbol> params = new ArrayList<>();
-        if (ctx.parameterList() != null)
-        {
-            for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
-            {
-                var pCtx = ctx.parameterList().parameter(i);
-                Type paramType = resolveTypeFromCtx(pCtx.type());
-                String paramName = pCtx.ID().getText();
-                NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
-                params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
-            }
-        }
+		// Build a list of ParameterSymbol
+		List<ParameterSymbol> params = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
+			{
+				var pCtx = ctx.parameterList().parameter(i);
+				Type paramType = resolveTypeFromCtx(pCtx.type());
+				String paramName = pCtx.ID().getText();
+				NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
+				params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
+			}
+		}
 
-        String methodName = ctx.ID().getText();
-        boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
-        boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
-        boolean isNative = ctx.NATIVE_KW() != null;
+		String methodName = ctx.ID().getText();
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+		boolean isNative = ctx.NATIVE_KW() != null;
 
-        // 'main' must always be treated as static
-        boolean isMain = methodName.equals("main");
-        if (isMain) {
-            isStatic = true;
-        }
+		// 'main' must always be treated as static
+		boolean isMain = methodName.equals("main");
+		if (isMain)
+		{
+			isStatic = true;
+		}
 
-        MethodSymbol ms = new MethodSymbol(methodName, returnType, params, currentScope, isStatic, isPublic, false, isNative);
-        currentClass.defineMethod(ms);
+		MethodSymbol ms = new MethodSymbol(methodName, returnType, params, currentScope, isStatic, isPublic, false, isNative);
+		currentClass.defineMethod(ms);
 
-        // Check for Main Method
-        if (isMain)
-        {
-            ms.setIsMainMethod();
-            Debug.logDebug("STB: Identified primary 'main' method:" + ms.getMangledName() + " (forced static)");
-        }
+		// Check for Main Method
+		if (isMain)
+		{
+			ms.setIsMainMethod();
+			Debug.logDebug("STB: Identified primary 'main' method:" + ms.getMangledName() + " (forced static)");
+		}
 
-        // If method has a body and is not native, visit its children (for discovery we may skip but here not)
-        visitChildren(ctx);
-        return null;
-    }
+		// If method has a body and is not native, visit its children (for discovery we may skip but here not)
+		visitChildren(ctx);
+		return null;
+	}
 
 	@Override
 	public Void visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
@@ -438,7 +439,8 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
 		boolean isNative = ctx.NATIVE_KW() != null;
 
-		MethodSymbol ms = new MethodSymbol(ctx.ID().getText(), currentClass.getType(), params, currentScope, false, isPublic, true, isNative);
+		String ctorName = currentClass.getName(); // constructors share class name
+		MethodSymbol ms = new MethodSymbol(ctorName, currentClass.getType(), params, currentScope, false, isPublic, true, isNative);
 		currentClass.defineMethod(ms);
 
 		// Do not visit body here; TypeCheck will visit and check bodies
@@ -462,6 +464,7 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		for (var declarator : ctx.variableDeclarator())
 		{
 			String varName = declarator.ID().getText();
+			String mangledName = currentClass.getMangledName() + "." + varName;
 			if (currentClass.resolveLocally(varName).isPresent())
 			{
 				errorHandler.logError(declarator.ID().getSymbol(), "Field '" + varName + "' is already defined in this class.", currentClass);
@@ -469,6 +472,9 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 			}
 
 			VariableSymbol vs = new VariableSymbol(varName, fieldType, isStatic, isPublic, isConst, isNative);
+
+			vs.setMangledName(mangledName); // Store the mangled name
+
 			currentClass.define(vs);
 		}
 		return null;
@@ -503,6 +509,43 @@ public class SymbolTableBuilder extends NebulaParserBaseVisitor<Void>
 		}
 
 		// Optional initializer handled in TypeCheckVisitor
+		return null;
+	}
+
+	@Override
+	public Void visitOperatorOverloadDeclaration(NebulaParser.OperatorOverloadDeclarationContext ctx)
+	{
+		if (currentClass == null)
+		{
+			errorHandler.logError(ctx.start, "Operator overload defined outside of a class.", currentClass);
+			return null;
+		}
+		Type returnType = resolveTypeFromCtx(ctx.type());
+
+		// Build a list of ParameterSymbol
+		List<ParameterSymbol> params = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (int i = 0; i < ctx.parameterList().parameter().size(); i++)
+			{
+				var pCtx = ctx.parameterList().parameter(i);
+				Type paramType = resolveTypeFromCtx(pCtx.type());
+				String paramName = pCtx.ID().getText();
+				NebulaParser.ExpressionContext defaultValCtx = pCtx.expression();
+				params.add(new ParameterSymbol(paramName, paramType, i, defaultValCtx));
+			}
+		}
+
+		// The method name is "operator" + the symbol, e.g., "operator+"
+		String methodName = "operator" + ctx.validOperatorOverloads().getText();
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		boolean isPublic = ctx.modifiers() == null || !ctx.modifiers().getText().contains("private");
+		boolean isNative = ctx.NATIVE_KW() != null;
+
+		MethodSymbol ms = new MethodSymbol(methodName, returnType, params, currentScope, isStatic, isPublic, false, isNative);
+		currentClass.defineMethod(ms);
+
+		// Do not visit children; TypeCheck will visit and check body
 		return null;
 	}
 	// variableDeclarator, parameter handling and other rules will be visited by visitors later

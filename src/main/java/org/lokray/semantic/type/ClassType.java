@@ -41,16 +41,26 @@ public class ClassType implements Type
 			// This is incorrect for structs, but ClassType is for classes which are reference types.
 			return true;
 		}
-		// TODO: Future enhancement for inheritance
-		// if (other instanceof ClassType) {
-		//     ClassSymbol current = this.classSymbol.getSuperClass();
-		//     while (current != null) {
-		//         if (current.getType().equals(other)) {
-		//             return true;
-		//         }
-		//         current = current.getSuperClass();
-		//     }
-		// }
+
+		// Allow assignment to Object (all classes implicitly inherit)
+		if (other.isReferenceType() && other.getName().equals("Object"))
+		{
+			return true;
+		}
+
+		// Check for inheritance
+		if (other instanceof ClassType)
+		{
+			ClassSymbol current = this.classSymbol.getSuperClass();
+			while (current != null)
+			{
+				if (current.getType().equals(other))
+				{
+					return true;
+				}
+				current = current.getSuperClass();
+			}
+		}
 
 		return false;
 	}

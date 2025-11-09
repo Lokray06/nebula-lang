@@ -5,11 +5,19 @@ import org.bytedeco.llvm.LLVM.LLVMBuilderRef;
 import org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import org.bytedeco.llvm.LLVM.LLVMValueRef;
 import org.lokray.parser.NebulaParser;
+import org.lokray.semantic.symbol.ClassSymbol;
+import org.lokray.semantic.symbol.Symbol;
+import org.lokray.semantic.symbol.VariableSymbol;
 import org.lokray.semantic.type.ArrayType;
+import org.lokray.semantic.type.ClassType;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.util.Debug;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.bytedeco.llvm.global.LLVM.*;
@@ -19,12 +27,57 @@ public class TypeConverter
 	// Cache for global struct types
 	private static final AtomicReference<LLVMTypeRef> globalStringStruct = new AtomicReference<>();
 	private static final AtomicReference<LLVMTypeRef> globalArrayDescStruct = new AtomicReference<>();
+	// Cache for user-defined class structs. We use FQN as the key.
+	private static final Map<String, LLVMTypeRef> globalClassStructs = new HashMap<>();
 
-    static void init()
-    {
-        getArrayDescStructType();
-        getArrayDescStructType();
-    }
+	static void init()
+	{
+		getArrayDescStructType();
+		getArrayDescStructType();
+	}
+
+	/**
+	 * Creates or retrieves the LLVM struct type for a given ClassSymbol.
+	 * This method defines the memory layout of a class instance.
+	 */
+	public static LLVMTypeRef getStructTypeForClass(ClassSymbol cs)
+	{
+		if (cs == null)
+		{
+			return null;
+		}
+
+		String fqn = cs.getFqn();
+		LLVMTypeRef cachedStruct = globalClassStructs.get(fqn);
+		if (cachedStruct != null)
+		{
+			return cachedStruct;
+		}
+
+		// Create a named, empty struct first. This is crucial for handling
+		// recursive types (e.g., class Node { Node next; })
+		LLVMTypeRef newStruct = LLVMStructCreateNamed(LLVMGetGlobalContext(), cs.getMangledName());
+		globalClassStructs.put(fqn, newStruct);
+
+		// Collect all *non-static* fields from this class
+		List<LLVMTypeRef> fieldTypes = new ArrayList<>();
+		for (Symbol member : cs.getSymbols().values())
+		{
+			if (member instanceof VariableSymbol vs && !vs.isStatic())
+			{
+				// Recursively call toLLVMType to get the type for this field
+				fieldTypes.add(toLLVMType(vs.getType()));
+			}
+		}
+
+		// Set the struct body with the resolved field types
+		LLVMTypeRef[] elems = fieldTypes.toArray(new LLVMTypeRef[0]);
+		PointerPointer<LLVMTypeRef> pp = new PointerPointer<>(elems);
+		LLVMStructSetBody(newStruct, pp, elems.length, 0);
+
+		Debug.logDebug("TypeConverter: Created struct " + cs.getMangledName() + " with " + elems.length + " fields.");
+		return newStruct;
+	}
 
 	// Create or reuse nebula_string struct
 	public static LLVMTypeRef getStringStructType()
@@ -136,6 +189,14 @@ public class TypeConverter
 			// Arrays are represented by a pointer to their descriptor struct
 			LLVMTypeRef descStruct = getArrayDescStructType();
 			return LLVMPointerType(descStruct, 0);
+		}
+
+		// --- Handle Class Types ---
+		if (type instanceof ClassType classType)
+		{
+			// Classes are references, so the type is a pointer to the struct
+			LLVMTypeRef structType = getStructTypeForClass(classType.getClassSymbol());
+			return LLVMPointerType(structType, 0); // Return a POINTER to the struct
 		}
 
 		// Fallback for unknown types

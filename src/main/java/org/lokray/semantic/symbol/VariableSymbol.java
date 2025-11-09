@@ -6,6 +6,7 @@ import org.lokray.semantic.type.Type;
 public class VariableSymbol implements Symbol
 {
 	private final String name;
+	private String mangledName;
 	private Type type;
 	private final boolean isStatic;
 	private final boolean isPublic;
@@ -31,6 +32,15 @@ public class VariableSymbol implements Symbol
 	public String getName()
 	{
 		return name;
+	}
+
+	public void setMangledName(String mangledName) {
+		this.mangledName = mangledName;
+	}
+
+	public String getMangledName() {
+		// Return mangled name if it's set, otherwise fall back to simple name
+		return (this.mangledName != null) ? this.mangledName : this.name;
 	}
 
 	@Override

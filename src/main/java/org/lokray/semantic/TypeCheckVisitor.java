@@ -356,9 +356,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 
 		if (classSymbol == null)
 		{
-			// 🚀 FIXING THE ERROR MESSAGE: Print the correct type name, not ctx.getText()
-			logError(ctx.start, "Internal error: Type symbol '" + ctx.ID().getText() +
-					"' not found in declared classes map. FQN attempted: " + fqn);
+			logError(ctx.start, "Internal error: Type symbol '" + ctx.ID().getText() + "' not found in declared classes map. FQN attempted: " + fqn);
 			return null;
 		}
 
@@ -498,6 +496,75 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 		}
 
+
+		currentScope = currentScope.getEnclosingScope();
+		currentMethod = null;
+		return declaredReturnType;
+	}
+
+	@Override
+	public Type visitOperatorOverloadDeclaration(NebulaParser.OperatorOverloadDeclarationContext ctx)
+	{
+		// The method name is "operator" + the symbol, e.g., "operator+"
+		String methodName = "operator" + ctx.validOperatorOverloads().getText();
+
+		// Collect parameter types from declaration
+		List<Type> paramTypes = new ArrayList<>();
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				paramTypes.add(resolveType(pCtx.type()));
+			}
+		}
+
+		// Resolve the declared return type of this method
+		Type declaredReturnType = resolveType(ctx.type());
+
+		// Find the exact matching method symbol (matches both params + return type)
+		Optional<MethodSymbol> methodOpt = ((ClassSymbol) currentScope).resolveMethodBySignature(methodName, paramTypes, declaredReturnType);
+
+		if (methodOpt.isEmpty())
+		{
+			logError(ctx.validOperatorOverloads().start,
+					"Internal error: Could not resolve method symbol for '" + methodName + "' with return type '"
+							+ declaredReturnType.getName() + "'.");
+			return ErrorType.INSTANCE;
+		}
+
+		MethodSymbol resolvedMethod = methodOpt.get();
+		note(ctx, resolvedMethod);
+
+		currentMethod = methodOpt.get();
+		currentScope = currentMethod;
+
+		// Visit parameters
+		if (ctx.parameterList() != null)
+		{
+			for (var pCtx : ctx.parameterList().parameter())
+			{
+				visit(pCtx);
+			}
+		}
+
+		// Visit method body
+		if (ctx.block() != null)
+		{
+			visit(ctx.block());
+		}
+
+		// Check for missing return statement (for non-void, non-native methods)
+		if (currentMethod.getType() != PrimitiveType.VOID && !currentMethod.isNative())
+		{
+			if (ctx.block() == null)
+			{
+				logError(ctx.start, "Native operator method must have a body or be implemented externally.");
+			}
+			else if (!blockReturns(ctx.block()))
+			{
+				logError(ctx.block().start, "Operator method must return a result of type '" + currentMethod.getType().getName() + "'. Not all code paths return a value.");
+			}
+		}
 
 		currentScope = currentScope.getEnclosingScope();
 		currentMethod = null;
@@ -1924,6 +1991,11 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		// Loop through all operands
 		for (int i = 1; i < ctx.multiplicativeExpression().size(); i++)
 		{
+			// --- START MODIFICATION (Fixes Error #4) ---
+			// Get the operator token *before* visiting the right side
+			Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
+			String op = opToken.getText();
+
 			Type rightType = visit(ctx.multiplicativeExpression(i));
 			if (rightType instanceof ErrorType)
 			{
@@ -1932,18 +2004,88 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			}
 
 			// Check for numeric compatibility
-			if (!leftType.isNumeric() || !rightType.isNumeric())
-			{
-				// Get the operator token
-				Token opToken = (Token) ctx.getChild(2 * i - 1).getPayload();
-				logError(opToken, "Arithmetic operator '" + opToken.getText() + "' cannot be applied to non-numeric types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
-				leftType = ErrorType.INSTANCE;
-			}
-			else
+			if (leftType.isNumeric() && rightType.isNumeric())
 			{
 				// Promote for the next iteration
 				leftType = Type.getWiderType(leftType, rightType);
 				expectedType = leftType; // Update expectation for the *next* right operand
+			}
+			// --- Check for operator overloading ---
+			else if (leftType.getClassSymbol() != null)
+			{
+				// It's not numeric. Check if the operator is overloaded on the left type.
+				String opMethodName = "operator" + op; // e.g., "operator+"
+
+				ClassSymbol leftClass = leftType.getClassSymbol();
+				List<MethodSymbol> opOverloads = leftClass.resolveMethods(opMethodName);
+
+				if (opOverloads.isEmpty())
+				{
+					// No overload found, this is an error
+					logError(opToken, "Arithmetic operator '" + op + "' cannot be applied to types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+					leftType = ErrorType.INSTANCE;
+				}
+				else
+				{
+					// Find the best overload that matches the rightType
+					MethodSymbol resolvedOp = null;
+					int bestCost = Integer.MAX_VALUE;
+					boolean ambiguous = false;
+
+					for (MethodSymbol candidate : opOverloads)
+					{
+						// Operator should have exactly one parameter
+						if (candidate.getParameters().size() == 1)
+						{
+							Type paramType = candidate.getParameters().get(0).getType();
+							if (rightType.isAssignableTo(paramType))
+							{
+								int cost = 0;
+								if (!rightType.equals(paramType))
+								{
+									cost = 1; // Simple cost: 0 for exact, 1 for assignable
+								}
+
+								if (cost < bestCost)
+								{
+									bestCost = cost;
+									resolvedOp = candidate;
+									ambiguous = false;
+								}
+								else if (cost == bestCost)
+								{
+									ambiguous = true;
+								}
+							}
+						}
+					}
+
+					if (ambiguous)
+					{
+						logError(opToken, "Ambiguous call to operator '" + op + "' with argument type '" + rightType.getName() + "'.");
+						leftType = ErrorType.INSTANCE;
+					}
+					else if (resolvedOp != null)
+					{
+						// Found it! The result type is the method's return type.
+						leftType = resolvedOp.getType();
+						// Note the resolved method on the *parent expression context*
+						// This tells the IRGenerator to generate a 'call'
+						note(ctx, resolvedOp);
+					}
+					else
+					{
+						// No overload matched
+						logError(opToken, "No overload for operator '" + op + "' takes an argument of type '" + rightType.getName() + "'.");
+						leftType = ErrorType.INSTANCE;
+					}
+				}
+			}
+			else
+			{
+				// Not numeric and not a class, e.g., "void + 1"
+				logError(opToken, "Arithmetic operator '" + op + "' cannot be applied to types '" + leftType.getName() + "' and '" + rightType.getName() + "'.");
+				leftType = ErrorType.INSTANCE;
 			}
 		}
 

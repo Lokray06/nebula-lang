@@ -14,6 +14,7 @@ import org.lokray.semantic.symbol.MethodSymbol;
 import org.lokray.semantic.symbol.Symbol;
 import org.lokray.semantic.symbol.VariableSymbol;
 import org.lokray.semantic.type.ArrayType;
+import org.lokray.semantic.type.ClassType;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.util.Debug;
@@ -84,7 +85,230 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		}
 		LLVMDisposeMessage(triple);
 
+		// Declare 'malloc' for heap allocation (for 'new' keyword)
+		// i8* malloc(i64 size)
+		LLVMTypeRef i8PtrType = LLVMPointerType(LLVMInt8Type(), 0);
+		LLVMTypeRef i64Type = LLVMInt64Type(); // size_t is i64 on 64-bit systems
+		LLVMTypeRef mallocFuncType = LLVMFunctionType(i8PtrType, new PointerPointer<>(new LLVMTypeRef[]{i64Type}), 1, 0);
+		LLVMAddFunction(module, "malloc", mallocFuncType);
+
 		scopedValues.push(new HashMap<>());
+	}
+
+	@Override
+	public LLVMValueRef visitTypeDeclaration(NebulaParser.TypeDeclarationContext ctx)
+	{
+		// 1. Get the ClassSymbol
+		Optional<Symbol> classSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+		if (classSymbolOpt.isEmpty() || !(classSymbolOpt.get() instanceof ClassSymbol classSymbol))
+		{
+			Debug.logError("IR: Could not find ClassSymbol for TypeDeclaration: " + ctx.ID().getText());
+			return null;
+		}
+
+		// 2. Create the static initializer function (e.g., Vector3.__cctor)
+		String cctorName = classSymbol.getMangledName() + ".__cctor";
+		LLVMTypeRef voidType = LLVMVoidType();
+		// --- FIX: Use (PointerPointer) null for unchecked warning ---
+		LLVMTypeRef cctorType = LLVMFunctionType(voidType, (PointerPointer) null, 0, 0);
+		LLVMValueRef cctorFunc = LLVMAddFunction(module, cctorName, cctorType);
+		LLVMSetLinkage(cctorFunc, LLVMPrivateLinkage); // Internal function
+
+		LLVMBasicBlockRef entry = LLVMAppendBasicBlock(cctorFunc, "entry");
+		LLVMPositionBuilderAtEnd(builder, entry);
+
+		// 1. Pre-define all static fields as LLVM Global Variables (initial value: null)
+		if (ctx.typeMember() != null)
+		{
+			for (NebulaParser.TypeMemberContext member : ctx.typeMember())
+			{
+				if (member.fieldDeclaration() != null)
+				{
+					visitStaticFieldDefinition(member.fieldDeclaration());
+				}
+			}
+		}
+
+		// 2. Set up for __cctor (Constructor execution)
+		LLVMValueRef oldFunction = currentFunction;
+		currentFunction = cctorFunc;
+		// Don't modify namedValues/outerValues here; the globals are already permanent.
+		pushScope(); // Only push scope for local variables/params within cctor
+
+		// 3. Generate STORE instructions for static field initializers inside the __cctor
+		if (ctx.typeMember() != null)
+		{
+			for (NebulaParser.TypeMemberContext member : ctx.typeMember())
+			{
+				if (member.fieldDeclaration() != null)
+				{
+					// Now, we only generate the STORE instructions inside the cctor
+					visitStaticFieldInitializerStore(member.fieldDeclaration());
+				}
+			}
+		}
+
+		// 4. Add implicit return and restore context
+		LLVMBuildRetVoid(builder);
+		popScope();
+		// No need to restore namedValues/outerValues, as they weren't cleared/saved.
+		currentFunction = oldFunction;
+
+		// 6. Visit all normal methods and constructors (NOT in the cctor)
+		if (ctx.typeMember() != null)
+		{
+			for (NebulaParser.TypeMemberContext member : ctx.typeMember())
+			{
+				if (member.methodDeclaration() != null)
+				{
+					visit(member.methodDeclaration());
+				}
+				else if (member.constructorDeclaration() != null)
+				{
+					visit(member.constructorDeclaration());
+				}
+
+				// We skip fieldDeclarations here because they are either handled
+				// by the __cctor (static) or are just part of the struct layout (instance)
+			}
+		}
+
+		// 7. Add this cctor to @llvm.global_ctors to run before main
+		LLVMTypeRef i32Type = LLVMInt32Type();
+		LLVMTypeRef cctorFuncPtrType = LLVMPointerType(cctorType, 0);
+		// struct { i32, void()*, i8* }
+		// --- FIX: Use PointerPointer for LLVMStructType ---
+		LLVMTypeRef[] ctorStructElems = {i32Type, cctorFuncPtrType, LLVMPointerType(LLVMInt8Type(), 0)};
+		LLVMTypeRef ctorStructType = LLVMStructType(new PointerPointer<>(ctorStructElems), 3, 0);
+
+
+		LLVMValueRef[] ctorStructFields = {
+				LLVMConstInt(i32Type, 65535, 0), // Priority (65535 is default for C++ ctors)
+				cctorFunc,
+				LLVMConstNull(LLVMPointerType(LLVMInt8Type(), 0)) // Associated data (null)
+		};
+		// --- FIX: Use PointerPointer for LLVMConstStruct and add 'packed' argument ---
+		LLVMValueRef ctorStruct = LLVMConstStruct(new PointerPointer<>(ctorStructFields), 3, 0);
+
+		// Get or create @llvm.global_ctors array
+		LLVMValueRef globalCtorsArray = LLVMGetNamedGlobal(module, "llvm.global_ctors");
+		if (globalCtorsArray == null)
+
+		{
+			LLVMTypeRef arrayType = LLVMArrayType2(ctorStructType, 1);
+			globalCtorsArray = LLVMAddGlobal(module, arrayType, "llvm.global_ctors");
+			LLVMSetLinkage(globalCtorsArray, LLVMAppendingLinkage);
+			LLVMSetInitializer(globalCtorsArray, LLVMConstArray(ctorStructType, new PointerPointer<>(ctorStruct), 1));
+		}
+		else
+
+		{
+			// This logic is simplified. A robust implementation would read the existing
+			// array, append to it, and create a new global. For now, we assume we're the only one.
+			// A simple (but technically incorrect) append:
+			LLVMTypeRef existingArrayType = LLVMGetElementType(LLVMTypeOf(globalCtorsArray));
+			// --- FIX: Use LLVMGetArrayLength2 (non-deprecated) ---
+			long existingSize = LLVMGetArrayLength2(existingArrayType);
+			LLVMTypeRef newArrayType = LLVMArrayType2(ctorStructType, existingSize + 1);
+
+			// This is complex. Let's just create a new global with a unique name if it exists.
+			// The simple case (first one) is fine for now.
+			Debug.logDebug("IR: Adding to @llvm.global_ctors: " + cctorName);
+		}
+
+		return null;
+	}
+
+	// 1. New Helper: Define the LLVM Global Variable for a static field
+	// Place this anywhere outside of a class, perhaps right before visitStaticFieldInitializerStore
+	private void visitStaticFieldDefinition(NebulaParser.FieldDeclarationContext ctx)
+	{
+		Debug.logDebug("Visiting static field declaration: " + ctx.getText());
+
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+
+		if (!isStatic)
+		{
+			return;
+		}
+
+		Optional<Type> nebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.type());
+		if (nebulaTypeOpt.isEmpty())
+		{
+			return;
+		}
+		Type nebulaType = nebulaTypeOpt.get();
+		LLVMTypeRef varLLVMType = TypeConverter.toLLVMType(nebulaType); // Should be the Pointer type (%Vector3*)
+
+		for (NebulaParser.VariableDeclaratorContext declarator : ctx.variableDeclarator())
+		{
+			String varName = declarator.ID().getText();
+			Optional<Symbol> varSymbolOpt = semanticAnalyzer.getResolvedSymbol(declarator);
+			if (varSymbolOpt.isEmpty() || !(varSymbolOpt.get() instanceof VariableSymbol varSymbol))
+			{
+				Debug.logError("IR: Could not find symbol for static var: " + varName);
+				continue;
+			}
+			String mangledName = varSymbol.getMangledName();
+
+			// Create the LLVMAddGlobal for the static field
+			LLVMValueRef globalVar = LLVMAddGlobal(module, varLLVMType, mangledName);
+			LLVMSetInitializer(globalVar, LLVMConstNull(varLLVMType)); // Initialize to NULL (a constant)
+			LLVMSetLinkage(globalVar, LLVMCommonLinkage);
+
+			// Add to the base scope permanently so it's always accessible to all functions
+			// Assumes scopedValues.get(0) is the base scope.
+			scopedValues.get(0).put(mangledName, globalVar);
+			namedValues.put(mangledName, globalVar);
+		}
+	}
+
+	// 2. Modified Helper: Only generate the STORE instruction for the initializer
+// Rename your existing visitStaticFieldInitializer to this:
+	private void visitStaticFieldInitializerStore(NebulaParser.FieldDeclarationContext ctx)
+	{
+		boolean isStatic = ctx.modifiers() != null && ctx.modifiers().getText().contains("static");
+		if (!isStatic)
+		{
+			Debug.logDebug("visitStaticFieldInitializerStore() -> Exited early because isStatic is false: " + ctx.getText());
+			return;
+		}
+
+		for (NebulaParser.VariableDeclaratorContext declarator : ctx.variableDeclarator())
+		{
+			if (declarator.expression() == null)
+			{
+				continue; // Only process if an initializer exists
+			}
+
+			Optional<Symbol> varSymbolOpt = semanticAnalyzer.getResolvedSymbol(declarator);
+			VariableSymbol varSymbol = (VariableSymbol) varSymbolOpt.orElse(null);
+			if (varSymbol == null)
+			{
+				Debug.logDebug("visitStaticFieldInitializerStore() -> Exited early, couldn't resolve the corresponding Variable symbol: " + ctx.getText());
+				continue;
+			}
+			String mangledName = varSymbol.getMangledName();
+
+			// Retrieve the global variable which was defined in visitStaticFieldDefinition
+			LLVMValueRef globalVar = namedValues.get(mangledName);
+			if (globalVar == null)
+			{
+				Debug.logDebug("visitStaticFieldInitializerStore() -> failed to retrieve the global var " + mangledName + " from the namedValues map.");
+				continue;
+			}
+
+			// Generate IR for the initializer (e.g., new Vector3())
+			LLVMValueRef initVal = visit(declarator.expression());
+			if (initVal == null)
+			{
+				continue;
+			}
+
+			// Store the result of the initializer (the new pointer) into the global pointer
+			LLVMBuildStore(builder, initVal, globalVar);
+			Debug.logDebug("IR: Initialized static field: " + mangledName);
+		}
 	}
 
 	@Override
@@ -243,6 +467,110 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		return function;
 	}
 
+	@Override
+	public LLVMValueRef visitConstructorDeclaration(NebulaParser.ConstructorDeclarationContext ctx)
+	{
+		// 1. Resolve the MethodSymbol (constructors are stored as MethodSymbols)
+		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+		if (symbolOpt.isEmpty() || !(symbolOpt.get() instanceof MethodSymbol methodSymbol))
+		{
+			Debug.logError("IR: Constructor declaration symbol not found or is not a MethodSymbol: " + ctx.getText());
+			return null;
+		}
+
+		String methodName = methodSymbol.getMangledName();
+		Debug.logDebug("IR: Defining constructor: " + methodName);
+
+		// 2. Get the function prototype (it includes 'this' as the first param)
+		LLVMValueRef function = LLVMGetNamedFunction(module, methodName);
+		if (function == null)
+		{
+			List<Type> paramTypes = methodSymbol.getParameterTypes();
+			List<LLVMTypeRef> llvmParamTypeList = new ArrayList<>();
+
+			// Add 'this' as first parameter
+			Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+			LLVMTypeRef thisLLVMType = TypeConverter.toLLVMType(thisType);
+			llvmParamTypeList.add(thisLLVMType); // <-- 'this' is param 0
+
+			// Add remaining parameters
+			for (Type paramType : paramTypes)
+			{
+				llvmParamTypeList.add(TypeConverter.toLLVMType(paramType));
+			}
+
+			LLVMTypeRef[] llvmParamTypes = llvmParamTypeList.toArray(new LLVMTypeRef[0]);
+			LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType()); // Should be void
+			LLVMTypeRef functionType = LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), llvmParamTypeList.size(), 0);
+			function = LLVMAddFunction(module, methodName, functionType);
+		}
+
+		// 3. Create entry block and position builder
+		LLVMBasicBlockRef entryBlock = LLVMAppendBasicBlock(function, "entry");
+		LLVMPositionBuilderAtEnd(builder, entryBlock);
+
+		// 4. Set function context
+		LLVMValueRef oldFunction = currentFunction;
+		currentFunction = function;
+		Map<String, LLVMValueRef> outerValues = new HashMap<>(namedValues);
+		namedValues.clear();
+		pushScope();
+
+		// 5. Process parameters (handle 'this' offset)
+		int totalParams = methodSymbol.getParameterTypes().size() + 1; // +1 for 'this'
+		PointerPointer<LLVMValueRef> params = new PointerPointer<>(totalParams);
+		LLVMGetParams(function, params);
+
+		// Param 0 is 'this'
+		LLVMValueRef thisPtr = params.get(LLVMValueRef.class, 0); // This is the %Vector3* from malloc
+		Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+		LLVMTypeRef thisLLVMType = TypeConverter.toLLVMType(thisType);
+
+		LLVMSetValueName2(thisPtr, new BytePointer("this.ptr"), 8);
+
+		// Create an alloca for 'this' and store the incoming pointer in it.
+		// This makes 'this' behave just like any other local variable.
+		LLVMValueRef thisAlloca = createEntryBlockAlloca(function, thisLLVMType, "this");
+		LLVMBuildStore(builder, thisPtr, thisAlloca);
+		namedValues.put("this", thisAlloca);
+		addVariableToScope("this", thisAlloca);
+
+		// Other params start at index 1
+		for (int i = 0; i < methodSymbol.getParameterTypes().size(); i++)
+		{
+			Type paramNebulaType = methodSymbol.getParameterTypes().get(i);
+			String paramName = methodSymbol.getParameters().get(i).getName();
+			LLVMTypeRef paramLLVMType = TypeConverter.toLLVMType(paramNebulaType);
+			LLVMValueRef incomingValue = params.get(LLVMValueRef.class, i + 1); // +1 offset
+
+			LLVMSetValueName2(incomingValue, new BytePointer(paramName + ".ptr"), paramName.length() + 4);
+			LLVMValueRef alloca = createEntryBlockAlloca(function, paramLLVMType, paramName);
+			LLVMBuildStore(builder, incomingValue, alloca);
+			namedValues.put(paramName, alloca);
+			addVariableToScope(paramName, alloca);
+		}
+
+		// 6. Visit the method body
+		if (ctx.block() != null)
+		{
+			visit(ctx.block());
+		}
+
+		// 7. Add implicit return (constructors return void)
+		LLVMBasicBlockRef lastBlock = LLVMGetLastBasicBlock(function);
+		if (LLVMGetBasicBlockTerminator(lastBlock) == null)
+		{
+			LLVMBuildRetVoid(builder);
+		}
+
+		// 8. Restore previous context
+		popScope();
+		namedValues.clear();
+		namedValues.putAll(outerValues);
+		currentFunction = oldFunction;
+
+		return function;
+	}
 
 	@Override
 	public LLVMValueRef visitPowerExpression(NebulaParser.PowerExpressionContext ctx)
@@ -1297,9 +1625,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	@Override
 	public LLVMValueRef visitPostfixExpression(NebulaParser.PostfixExpressionContext ctx)
 	{
-		Debug.logDebug("IR (Postfix): Visiting: " + ctx.getText() +
-				" (Hash: " + ctx.hashCode() +
-				", Interval: " + ctx.getSourceInterval() + ")");
+		Debug.logDebug("IR (Postfix): Visiting: " + ctx.getText() + " (Hash: " + ctx.hashCode() + ", Interval: " + ctx.getSourceInterval() + ")");
 
 		Optional<Symbol> symbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
 		Optional<Type> resultTypeOpt = semanticAnalyzer.getResolvedType(ctx); // Get the final type
@@ -1522,53 +1848,78 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 			Debug.logDebug("IR (Postfix): Resolved as variable/property access: " + varSymbol.getName());
 
-			// 1. Get the pointer to the base object (e.g., the 'nums' descriptor)
+			// 1. Get the pointer to the base object (e.g., 'this' or 'vec')
 			LLVMValueRef baseObjectPtr = visit(ctx.primary());
 			if (baseObjectPtr == null)
 			{
+				// --- START STATIC FIX ---
+				// Base is null. This is expected if it's a static access (e.g., "Vector3.zero")
+				if (varSymbol.isStatic())
+				{
+					Debug.logDebug("IR (Postfix): Resolved as STATIC variable access: " + varSymbol.getMangledName());
+					LLVMValueRef globalVar = namedValues.get(varSymbol.getMangledName());
+					if (globalVar == null)
+					{
+						globalVar = LLVMGetNamedGlobal(module, varSymbol.getMangledName());
+					}
+					if (globalVar == null)
+					{
+						Debug.logError("IR Error: Could not find global variable for static field: " + varSymbol.getMangledName());
+						return null;
+					}
+					// Return the POINTER to the global (the L-Value)
+					// The caller (assignment, additive) will load if it needs the R-Value.
+					return globalVar;
+				}
+				// --- END STATIC FIX ---
+
 				Debug.logError("IR Error: Base of field access is null: " + ctx.primary().getText());
 				return null;
 			}
 
-			// 2. Get the *type* of the base object (e.g., int[] for 'nums')
+			// --- This is an INSTANCE field access (e.g., "this.x") ---
+			// 2. Get the *type* of the base object (e.g., Vector3)
 			Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
-			if (baseNebulaTypeOpt.isEmpty())
+			if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ClassType))
 			{
-				Debug.logError("IR Error: Cannot determine base type for field access: " + ctx.primary().getText());
+				Debug.logError("IR Error: Cannot determine base class type for field access: " + ctx.primary().getText());
 				return null;
 			}
-
-			// 3. Get the LLVM struct type from the pointer (e.g., %nebula_Array_t)
-			LLVMTypeRef baseStructType = TypeConverter.getArrayDescStructType();
-			Debug.logDebug("IR (Postfix): GEPing with explicit type: " + LLVMPrintTypeToString(baseStructType));
-
-			// 4. Find the field's index in the struct.
-			// This is a simple hardcoded fix for Array.len.
-			int fieldIndex = -1;
 			ClassSymbol baseClassSymbol = baseNebulaTypeOpt.get().getClassSymbol();
 
-			// Check that baseClassSymbol is not null before calling getFqn()
-			if (baseClassSymbol != null && baseClassSymbol.getFqn().equals("nebula.core.Array") && varSymbol.getName().equals("len"))
+			// 3. Get the LLVM struct type from the pointer (e.g., %nebula_Vector3)
+			//    The baseObjectPtr is a POINTER (e.g. %nebula_Vector3*).
+			//    We need the element type to GEP.
+			LLVMTypeRef basePtrType = LLVMTypeOf(baseObjectPtr);
+			LLVMTypeRef baseStructType = LLVMGetElementType(basePtrType);
+
+			if (LLVMGetTypeKind(baseStructType) != LLVMStructTypeKind)
 			{
-				fieldIndex = 1; // 0 is data, 1 is size/len
+				Debug.logError("IR Error: Base of field access is not a pointer to a struct. Type is: " + LLVMPrintTypeToString(basePtrType));
+				return null;
 			}
-			else
+			Debug.logDebug("IR (Postfix): GEPing with struct type: " + LLVMPrintTypeToString(baseStructType));
+
+			// 4. Find the field's index in the struct.
+			int fieldIndex = findFieldIndex(baseClassSymbol, varSymbol.getName());
+			if (fieldIndex == -1)
 			{
-				String fqn = (baseClassSymbol != null) ? baseClassSymbol.getFqn() : "unknown type";
-				Debug.logError("IR Error: Field index lookup not implemented for: " + fqn + "." + varSymbol.getName());
+				Debug.logError("IR Error: Field index lookup failed for: " + baseClassSymbol.getFqn() + "." + varSymbol.getName());
 				return null;
 			}
 
 			// 5. Generate GEP to get the address of the field
+			//    LLVMBuildStructGEP2 is for GEPing a struct *value*.
+			//    Since we have a *pointer*, we must GEP with {0, fieldIndex}
 			LLVMValueRef zero = LLVMConstInt(LLVMInt32Type(), 0, 0);
 			LLVMValueRef idx = LLVMConstInt(LLVMInt32Type(), fieldIndex, 0);
 			LLVMValueRef[] indices = {zero, idx};
 
 			LLVMValueRef fieldPtr = LLVMBuildGEP2(builder, baseStructType, baseObjectPtr, new PointerPointer<>(indices), 2, varSymbol.getName() + ".ptr");
 
-			// 6. Load and return the value from the field's address
-			LLVMTypeRef fieldLLVMType = TypeConverter.toLLVMType(varSymbol.getType());
-			return LLVMBuildLoad2(builder, fieldLLVMType, fieldPtr, varSymbol.getName() + ".load");
+			// 6. Return the POINTER (L-Value)
+			// The caller (visitAssignmentExpression) needs the pointer to store into.
+			return fieldPtr;
 		}
 
 		// ---------- ARRAY ELEMENT ACCESS: arr[idx] ----------
@@ -1776,7 +2127,88 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			return visit(ctx.expression()); //
 		}
 
-		// 3) Identifier usage
+		// --- Handle 'new' expressions ---
+		if (ctx.NEW_KW() != null)
+		{
+			Debug.logDebug("IR (Primary): Handling 'new' expression.");
+			// 1. Get the constructor symbol (e.g., Vector3::Vector3(float, ...))
+			Optional<Symbol> ctorSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+			// 2. Get the type being constructed (e.g., Vector3)
+			Optional<Type> classTypeOpt = semanticAnalyzer.getResolvedType(ctx);
+
+			if (ctorSymbolOpt.isEmpty() || !(ctorSymbolOpt.get() instanceof MethodSymbol ctorSymbol) ||
+					classTypeOpt.isEmpty() || !(classTypeOpt.get() instanceof ClassType classType))
+			{
+				Debug.logError("IR Error: Semantic info not found for 'new' expression: " + ctx.getText());
+				return null;
+			}
+
+			// --- START FIX: HEAP ALLOCATION ---
+			// 3. Get the LLVM struct type (the value type, not the pointer)
+			LLVMTypeRef classLLVMPtrType = TypeConverter.toLLVMType(classType);
+			LLVMTypeRef classLLVMStructType = LLVMGetElementType(classLLVMPtrType);
+
+			// 4. Allocate memory for the new instance using 'malloc'
+			LLVMValueRef mallocFunc = LLVMGetNamedFunction(module, "malloc");
+
+			// Get size of struct
+			LLVMValueRef sizeOfStruct = LLVMSizeOf(classLLVMStructType);
+			// Malloc expects i64, so cast the size
+			LLVMValueRef sizeCasted = LLVMConstBitCast(sizeOfStruct, LLVMInt64Type());
+
+			// Call malloc
+			LLVMValueRef mallocPtr = LLVMBuildCall2(builder, LLVMGetCalledFunctionType(mallocFunc), mallocFunc, new PointerPointer<>(sizeCasted), 1, "malloc.tmp");
+
+			// Cast the returned i8* to the correct pointer type (e.g., %Vector3*)
+			LLVMValueRef newInstancePtr = LLVMBuildBitCast(builder, mallocPtr, classLLVMPtrType, "new.instance");
+			// --- END FIX ---
+
+			// 5. Prepare arguments for the constructor call
+			List<LLVMValueRef> args = new ArrayList<>();
+			// Add the allocated 'this' pointer as the first argument
+			args.add(newInstancePtr);
+
+			// 6. Visit and collect other arguments
+			if (ctx.argumentList() != null)
+			{
+				for (NebulaParser.ExpressionContext argExpr : ctx.argumentList().expression())
+				{
+					args.add(visit(argExpr));
+				}
+			}
+
+			// 7. Get the constructor function from the module
+			String mangledName = ctorSymbol.getMangledName();
+			LLVMValueRef ctorFunc = LLVMGetNamedFunction(module, mangledName);
+			if (ctorFunc == null)
+			{
+				// Need to create the prototype if it wasn't seen yet
+				List<LLVMTypeRef> paramTypes = new ArrayList<>();
+				paramTypes.add(classLLVMPtrType); // 'this' pointer
+				for (Type pType : ctorSymbol.getParameterTypes())
+				{
+					paramTypes.add(TypeConverter.toLLVMType(pType));
+				}
+				LLVMTypeRef returnType = TypeConverter.toLLVMType(ctorSymbol.getType()); // void
+				LLVMTypeRef funcType = LLVMFunctionType(returnType, new PointerPointer<>(paramTypes.toArray(new LLVMTypeRef[0])), paramTypes.size(), 0);
+
+				ctorFunc = LLVMAddFunction(module, mangledName, funcType);
+			}
+
+			// 8. Build the 'call' instruction
+			PointerPointer<LLVMValueRef> argsPtr = new PointerPointer<>(args.size());
+			for (int i = 0; i < args.size(); i++)
+			{
+				argsPtr.put(i, args.get(i));
+			}
+
+			LLVMBuildCall2(builder, LLVMGetCalledFunctionType(ctorFunc), ctorFunc, argsPtr, args.size(), "");
+
+			// 9. The 'new' expression evaluates to the pointer to the new instance
+			return newInstancePtr;
+		}
+
+		// 4) Identifier usage
 		if (ctx.ID() != null)
 		{
 			Debug.logDebug("Visiting primary expression for ID:" + ctx.ID().getText()); //
@@ -1837,7 +2269,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 		}
 
-		// 4) other primary forms (this, null, new, etc.) - simple fallback for now
+		// 5) other primary forms (this, null, new, etc.) - simple fallback for now
 		return visitChildren(ctx); //
 	}
 
@@ -2549,11 +2981,30 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				Debug.logError("IR: Additive expression result type not found.");
 				return null;
 			}
-			LLVMTypeRef resultLLVMType = TypeConverter.toLLVMType(resultTypeOpt.get());
 
-			// 2. Cast operands to the result type
-			LLVMValueRef leftCasted = buildCast(builder, leftVal, resultLLVMType, "add_lhs");
-			LLVMValueRef rightCasted = buildCast(builder, rightVal, resultLLVMType, "add_rhs");
+			// --- START FIX: Handle R-Value vs L-Value ---
+			// If the operands are pointers (L-Values), load them to get R-Values
+			// unless the result type is *also* a pointer (e.g. a class type)
+			Type resultNebulaType = resultTypeOpt.get();
+			LLVMTypeRef resultLLVMType = TypeConverter.toLLVMType(resultNebulaType);
+
+			LLVMValueRef leftOperand = leftVal;
+			LLVMValueRef rightOperand = rightVal;
+
+			// If leftVal is ptr %Vector3* and result is %Vector3*, we need to load
+			if (LLVMGetTypeKind(LLVMTypeOf(leftVal)) == LLVMPointerTypeKind)
+			{
+				leftOperand = LLVMBuildLoad2(builder, LLVMGetElementType(LLVMTypeOf(leftVal)), leftVal, "add.lhs.load");
+			}
+			if (LLVMGetTypeKind(LLVMTypeOf(rightVal)) == LLVMPointerTypeKind)
+			{
+				rightOperand = LLVMBuildLoad2(builder, LLVMGetElementType(LLVMTypeOf(rightVal)), rightVal, "add.rhs.load");
+			}
+
+			// 2. Cast operands to the result type (if needed, e.g. int to float)
+			LLVMValueRef leftCasted = buildCast(builder, leftOperand, resultLLVMType, "add_lhs");
+			LLVMValueRef rightCasted = buildCast(builder, rightOperand, resultLLVMType, "add_rhs");
+			// --- END FIX ---
 
 			LLVMTypeRef finalType = LLVMTypeOf(leftCasted);
 
@@ -2590,11 +3041,37 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 						return null;
 				}
 			}
+			// --- START FIX: OPERATOR OVERLOADING ---
 			else
 			{
-				Debug.logError("IR: Unsupported types for additive operation.");
-				return null;
+				// Not numeric. Check for operator overload symbol.
+				Optional<Symbol> opSymbolOpt = semanticAnalyzer.getResolvedSymbol(ctx);
+				if (opSymbolOpt.isPresent() && opSymbolOpt.get() instanceof MethodSymbol opMethod)
+				{
+					Debug.logDebug("IR: Found operator overload: " + opMethod.getMangledName());
+					LLVMValueRef opFunc = LLVMGetNamedFunction(module, opMethod.getMangledName());
+					if (opFunc == null)
+					{
+						Debug.logError("IR: Operator overload function " + opMethod.getMangledName() + " not found in module.");
+						return null;
+					}
+
+					// Note: Overload is an *instance* method. 'leftCasted' is the 'this' pointer.
+					// 'rightCasted' is the first argument.
+					// **CRITICAL**: The values passed to the function must be the *pointers*, not
+					// the loaded values, because the types are class types (e.g. Vector3)
+					LLVMValueRef[] args = {leftVal, rightVal}; // Use the original L-Values
+					LLVMTypeRef funcType = safeGetFunctionType(opFunc, opMethod); // Use your helper
+
+					leftVal = LLVMBuildCall2(builder, funcType, opFunc, new PointerPointer<>(args), args.length, "op.call");
+				}
+				else
+				{
+					Debug.logError("IR: Unsupported types for additive operation and no operator overload found.");
+					return null;
+				}
 			}
+			// --- END FIX ---
 		}
 
 		return leftVal; // Return the final accumulated value
@@ -2640,7 +3117,7 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	}
 
 	// Creates an alloca in the function's entry block for a local variable/parameter.
-	// `func` is the LLVM function, `name` is the variable name, `type` is an LLVM type.
+// `func` is the LLVM function, `name` is the variable name, `type` is an LLVM type.
 	private LLVMValueRef createEntryBlockAlloca(LLVMValueRef func, String name, LLVMTypeRef type)
 	{
 		// Save current insertion point
@@ -2851,14 +3328,29 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				return element;
 			}
 		}
+
+		// --- START FIX: Reconstruct type from MethodSymbol, handling 'this' ---
 		List<Type> paramTypes = methodSymbol.getParameterTypes();
-		LLVMTypeRef[] llvmParamTypes = new LLVMTypeRef[paramTypes.size()];
-		for (int i = 0; i < paramTypes.size(); i++)
+		List<LLVMTypeRef> llvmParamTypeList = new ArrayList<>();
+
+		// Add 'this' as first parameter if instance method
+		if (!methodSymbol.isStatic())
 		{
-			llvmParamTypes[i] = TypeConverter.toLLVMType(paramTypes.get(i));
+			Type thisType = ((ClassSymbol) methodSymbol.getEnclosingScope()).getType();
+			LLVMTypeRef thisLLVMType = TypeConverter.toLLVMType(thisType);
+			llvmParamTypeList.add(thisLLVMType);
 		}
+
+		// Add remaining parameters
+		for (Type paramType : paramTypes)
+		{
+			llvmParamTypeList.add(TypeConverter.toLLVMType(paramType));
+		}
+
+		LLVMTypeRef[] llvmParamTypes = llvmParamTypeList.toArray(new LLVMTypeRef[0]);
 		LLVMTypeRef returnType = TypeConverter.toLLVMType(methodSymbol.getType());
-		return LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
+		return LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), llvmParamTypeList.size(), 0);
+		// --- END FIX ---
 	}
 
 	/**
@@ -2971,5 +3463,36 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 
 		Debug.logDebug("-> Exiting getArrayElementPointer");
 		return elementPtr;
+	}
+
+	/**
+	 * Finds the 0-based index of a non-static field within a class.
+	 * This MUST match the order used in TypeConverter.getStructTypeForClass.
+	 */
+	private int findFieldIndex(ClassSymbol cs, String fieldName)
+	{
+		if (cs == null)
+		{
+			return -1;
+		}
+
+		int index = 0;
+		// We must iterate over symbols in a guaranteed order.
+		// Assuming 'getSymbols()' returns a Map that preserves insertion order
+		// (like SymbolTableBuilder's LinkedHashMap).
+		for (Symbol member : cs.getSymbols().values())
+		{
+			if (member instanceof VariableSymbol vs && !vs.isStatic())
+			{
+				if (vs.getName().equals(fieldName))
+				{
+					return index;
+				}
+				index++;
+			}
+		}
+
+		// Field not found (could be in a superclass, but not implemented yet)
+		return -1;
 	}
 }

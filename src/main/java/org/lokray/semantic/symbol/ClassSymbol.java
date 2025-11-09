@@ -12,6 +12,7 @@ import java.util.*;
 public class ClassSymbol extends Scope implements Symbol
 {
 	private final String name;
+	private final String mangledName;
 	private final ClassType type;
 	private final Map<String, List<MethodSymbol>> methodsByName = new HashMap<>();
 	private final Map<String, List<MethodSymbol>> methodsByMangledName = new HashMap<>();
@@ -31,6 +32,24 @@ public class ClassSymbol extends Scope implements Symbol
 		this.type = new ClassType(this);
 		this.isNative = isNative;
 		this.isPublic = isPublic;
+		this.mangledName = constructMangledName();
+	}
+
+	private String constructMangledName()
+	{
+		Scope parent = this.getEnclosingScope();
+		if (parent instanceof ClassSymbol)
+		{
+			ClassSymbol classSymbol = (ClassSymbol) parent;
+			String fqn = classSymbol.getName();
+			if (classSymbol.getEnclosingScope() instanceof NamespaceSymbol)
+			{
+				fqn = ((NamespaceSymbol) classSymbol.getEnclosingScope()).getFqn() + "." + classSymbol.getName();
+			}
+
+			return fqn.replace('.', '_') + "_" + this.getName();
+		}
+		return this.getName();
 	}
 
 	/**
@@ -72,6 +91,11 @@ public class ClassSymbol extends Scope implements Symbol
 	public ClassSymbol getSuperClass()
 	{
 		return superClass;
+	}
+
+	public String getMangledName()
+	{
+		return this.mangledName;
 	}
 
 	public void setSuperClass(ClassSymbol superClass)
