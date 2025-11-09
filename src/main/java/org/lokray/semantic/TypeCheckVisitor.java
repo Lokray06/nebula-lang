@@ -1406,6 +1406,12 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				{
 					currentSymbol = performSubstitution(currentSymbol, genericType);
 				}
+				// ADD THIS ELSE IF BLOCK
+				else if (currentType instanceof ArrayType arrayType && scopeToSearch instanceof ClassSymbol baseStruct && baseStruct.isGenericDefinition())
+				{
+					// This is an ArrayType (e.g., int[]) accessing a member from its generic base (Array<T>)
+					currentSymbol = performArraySubstitution(currentSymbol, arrayType, baseStruct);
+				}
 
 				if (currentSymbol instanceof MethodSymbol)
 				{
@@ -1458,52 +1464,55 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 				currentType = callType;
 				currentSymbol = resolvedMethod;
 			}
-            else if (operator.getText().equals("["))
-            {
-                // This is an array access, e.g., arr[i]
+			else if (operator.getText().equals("["))
+			{
+				// This is an array access, e.g., arr[i]
 
-                // 1. Check if the current type is an array
-                if (!(currentType instanceof ArrayType arrayType)) {
-                    errorHandler.logError(ctx.start, "Cannot apply indexing with [] to a non-array type '" + currentType.getName() + "'.", currentClass);
-                    return ErrorType.INSTANCE;
-                }
+				// 1. Check if the current type is an array
+				if (!(currentType instanceof ArrayType arrayType))
+				{
+					errorHandler.logError(ctx.start, "Cannot apply indexing with [] to a non-array type '" + currentType.getName() + "'.", currentClass);
+					return ErrorType.INSTANCE;
+				}
 
-                i++; // Move to the index expression
-                if (i >= ctx.getChildCount() || !(ctx.getChild(i) instanceof NebulaParser.ExpressionContext)) {
-                    // Should be caught by parser
-                    return ErrorType.INSTANCE;
-                }
+				i++; // Move to the index expression
+				if (i >= ctx.getChildCount() || !(ctx.getChild(i) instanceof NebulaParser.ExpressionContext))
+				{
+					// Should be caught by parser
+					return ErrorType.INSTANCE;
+				}
 
-                // 2. Visit the index expression and check if it's an integer
+				// 2. Visit the index expression and check if it's an integer
 
-                // --- START FIX ---
-                // Get the canonical 'int' type from the global scope
-                Type intType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE);
+				// --- START FIX ---
+				// Get the canonical 'int' type from the global scope
+				Type intType = globalScope.resolve("int").map(Symbol::getType).orElse(ErrorType.INSTANCE);
 
-                // Visit the index expression, EXPLICITLY EXPECTING an 'int'
-                Type indexType = visitExpecting(ctx.getChild(i), intType);
-                // --- END FIX ---
+				// Visit the index expression, EXPLICITLY EXPECTING an 'int'
+				Type indexType = visitExpecting(ctx.getChild(i), intType);
+				// --- END FIX ---
 
-                if (!indexType.isInteger()) {
-                    errorHandler.logError(((NebulaParser.ExpressionContext)ctx.getChild(i)).start, "Array index must be an integer, but found '" + indexType.getName() + "'.", currentClass);
-                }
+				if (!indexType.isInteger())
+				{
+					errorHandler.logError(((NebulaParser.ExpressionContext) ctx.getChild(i)).start, "Array index must be an integer, but found '" + indexType.getName() + "'.", currentClass);
+				}
 
-                i++; // Move past the expression
+				i++; // Move past the expression
 
-                if (i >= ctx.getChildCount() || !ctx.getChild(i).getText().equals("]"))
-                {
-                    // Should be caught by parser
-                    return ErrorType.INSTANCE;
-                }
+				if (i >= ctx.getChildCount() || !ctx.getChild(i).getText().equals("]"))
+				{
+					// Should be caught by parser
+					return ErrorType.INSTANCE;
+				}
 
-                // 3. The type of the *entire expression* (e.g., arr[i]) is now the element type
-                currentType = arrayType.getElementType();
+				// 3. The type of the *entire expression* (e.g., arr[i]) is now the element type
+				currentType = arrayType.getElementType();
 
-                // 4. An element itself isn't a symbol, so we clear it.
-                // This is correct because the *type* is what matters for the next
-                // part of the chain (e.g., arr[i].someMethod()).
-                currentSymbol = null;
-            }
+				// 4. An element itself isn't a symbol, so we clear it.
+				// This is correct because the *type* is what matters for the next
+				// part of the chain (e.g., arr[i].someMethod()).
+				currentSymbol = null;
+			}
 
 			i++;
 		}
@@ -3034,7 +3043,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 	 * @param context    The instantiated generic type (e.g., 'List<string>').
 	 * @return A new Symbol with all type parameters replaced by concrete type arguments.
 	 */
-	private Symbol performSubstitution(Symbol baseMember, GenericType context)
+	private Symbol performSubstitution(Symbol baseMember, GenericType context) // [cite: 2945]
 	{
 		// 1. Build the substitution map (e.g., T -> string)
 		Map<TypeParameterSymbol, Type> substitutionMap = new HashMap<>();
@@ -3046,74 +3055,7 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			substitutionMap.put(typeParams.get(i), typeArgs.get(i));
 		}
 
-		// 2. Recursively substitute types within the member
-		if (baseMember instanceof MethodSymbol baseMethod)
-		{
-			// 2a. Substitute return type
-			Type substitutedReturnType = substituteType(baseMethod.getType(), substitutionMap);
-
-			// 2b. Substitute parameters
-			List<ParameterSymbol> substitutedParams = new ArrayList<>();
-			boolean paramsChanged = false;
-			for (ParameterSymbol baseParam : baseMethod.getParameters())
-			{
-				Type substitutedParamType = substituteType(baseParam.getType(), substitutionMap);
-				if (substitutedParamType != baseParam.getType())
-				{
-					paramsChanged = true;
-				}
-				// Create a new ParameterSymbol with the substituted type
-				substitutedParams.add(new ParameterSymbol(
-						baseParam.getName(),
-						substitutedParamType,
-						baseParam.getPosition(),
-						baseParam.getDefaultValueCtx().orElse(null)
-				));
-			}
-
-			// 3. If no types changed, return the original symbol
-			if (substitutedReturnType == baseMethod.getType() && !paramsChanged)
-			{
-				return baseMethod;
-			}
-
-			// 4. Create a new, temporary MethodSymbol with the substituted types
-			// This symbol is "ephemeral" and used only for this type check.
-			return new MethodSymbol(
-					baseMethod.getName(),
-					substitutedReturnType,
-					substitutedParams,
-					baseMethod.getEnclosingScope(), // Scope remains the base class
-					baseMethod.isStatic(),
-					baseMethod.isPublic(),
-					baseMethod.isConstructor(),
-					baseMethod.isNative()
-			);
-
-		}
-		else if (baseMember instanceof VariableSymbol baseField)
-		{
-			// 1. Substitute field type
-			Type substitutedFieldType = substituteType(baseField.getType(), substitutionMap);
-
-			if (substitutedFieldType == baseField.getType())
-			{
-				return baseField; // No substitution occurred
-			}
-
-			// 2. Create a new, temporary VariableSymbol
-			return new VariableSymbol(
-					baseField.getName(),
-					substitutedFieldType,
-					baseField.isStatic(),
-					baseField.isPublic(),
-					baseField.isConst(),
-					baseField.isNative()
-			);
-		}
-
-		// Not a method or field, or no substitution needed (e.g., a nested class)
-		return baseMember;
+		return substituteMember(baseMember, substitutionMap);
 	}
 
 	/**
@@ -3222,4 +3164,95 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		return simpleName;
 	}
 
+	/**
+	 * FIX: Create a new helper for ArrayType substitution.
+	 */
+	private Symbol performArraySubstitution(Symbol baseMember, ArrayType arrayType, ClassSymbol baseStruct)
+	{
+		// Assumes Array<T> has only one type parameter 'T'
+		if (baseStruct.getTypeParameters().isEmpty())
+		{
+			return baseMember; // Not generic? Should not happen based on check.
+		}
+
+		TypeParameterSymbol T_param = baseStruct.getTypeParameters().get(0);
+		Type concreteType = arrayType.getElementType();
+		Map<TypeParameterSymbol, Type> subMap = Map.of(T_param, concreteType);
+
+		return substituteMember(baseMember, subMap);
+	}
+
+	/**
+	 * FIX: New common helper that performs substitution using a pre-built map.
+	 * (This is just the logic moved from your original performSubstitution)
+	 */
+	private Symbol substituteMember(Symbol baseMember, Map<TypeParameterSymbol, Type> substitutionMap)
+	{
+		if (baseMember instanceof MethodSymbol baseMethod)
+		{
+			// 2a. Substitute return type
+			Type substitutedReturnType = substituteType(baseMethod.getType(), substitutionMap);
+
+			// 2b. Substitute parameters
+			List<ParameterSymbol> substitutedParams = new ArrayList<>();
+			boolean paramsChanged = false;
+			for (ParameterSymbol baseParam : baseMethod.getParameters())
+			{
+				Type substitutedParamType = substituteType(baseParam.getType(), substitutionMap);
+				if (substitutedParamType != baseParam.getType())
+				{
+					paramsChanged = true;
+				}
+				// Create a new ParameterSymbol with the substituted type
+				substitutedParams.add(new ParameterSymbol(
+						baseParam.getName(),
+						substitutedParamType,
+						baseParam.getPosition(),
+						baseParam.getDefaultValueCtx().orElse(null)
+				));
+			}
+
+			// 3. If no types changed, return the original symbol
+			if (substitutedReturnType == baseMethod.getType() && !paramsChanged)
+			{
+				return baseMethod;
+			}
+
+			// 4. Create a new, temporary MethodSymbol with the substituted types
+			return new MethodSymbol(
+					baseMethod.getName(),
+					substitutedReturnType,
+					substitutedParams,
+					baseMethod.getEnclosingScope(), // Scope remains the base class
+					baseMethod.isStatic(),
+					baseMethod.isPublic(),
+					baseMethod.isConstructor(),
+					baseMethod.isNative()
+			);
+
+		}
+		else if (baseMember instanceof VariableSymbol baseField)
+		{
+			// 1. Substitute field type
+			Type substitutedFieldType = substituteType(baseField.getType(), substitutionMap);
+
+			if (substitutedFieldType == baseField.getType())
+			{
+				return baseField; // No substitution occurred
+			}
+
+			// 2. Create a new, temporary VariableSymbol
+			return new VariableSymbol(
+					baseField.getName(),
+					substitutedFieldType,
+					baseField.isStatic(),
+					baseField.isPublic(),
+					baseField.isConst(),
+					baseField.isNative()
+			);
+		}
+
+		// Not a method or field, or no substitution needed
+		return baseMember;
+	}
 }

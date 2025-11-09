@@ -3,6 +3,7 @@ package org.lokray.semantic;
 import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.lokray.semantic.symbol.*;
+import org.lokray.semantic.type.ArrayType;
 import org.lokray.semantic.type.PrimitiveType;
 import org.lokray.semantic.type.Type;
 import org.lokray.semantic.type.UnresolvedType;
@@ -66,6 +67,7 @@ public class SemanticAnalyzer
 	{
 		linkNdkSymbols();
 		linkIntrinsicsToNdkStructs();
+		linkArrayTypeToBackingStruct();
 		autoImportNebulaCore(globalScope);
 	}
 
@@ -438,5 +440,21 @@ public class SemanticAnalyzer
 		}
 
 		return result.toString();
+	}
+
+	private void linkArrayTypeToBackingStruct()
+	{
+		Debug.logDebug("Linking ArrayType to nebula.core.Array struct...");
+		Symbol arraySymbol = declaredClasses.get("nebula.core.Array");
+
+		if (arraySymbol instanceof StructSymbol arrayStruct)
+		{
+			ArrayType.setBackingStruct(arrayStruct); //
+			Debug.logDebug("  -> Successfully linked ArrayType to " + arrayStruct.getFqn());
+		}
+		else
+		{
+			Debug.logWarning("  -> FAILED to link ArrayType. 'nebula.core.Array' not found or is not a StructSymbol.");
+		}
 	}
 }

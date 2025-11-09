@@ -2,6 +2,7 @@
 package org.lokray.semantic.type;
 
 import org.lokray.semantic.symbol.ClassSymbol;
+import org.lokray.semantic.symbol.StructSymbol;
 
 import java.util.Objects;
 
@@ -14,7 +15,13 @@ public class ArrayType implements Type
 {
 	private final Type elementType;
 	// We might add a built-in Array class symbol later for methods like .length
-	// private static ClassSymbol backingArrayClass = null; // Example placeholder
+
+	private static StructSymbol backingArrayStruct = null;
+
+	public static void setBackingStruct(StructSymbol struct)
+	{
+		backingArrayStruct = struct;
+	}
 
 	public ArrayType(Type elementType)
 	{
@@ -91,12 +98,11 @@ public class ArrayType implements Type
 		return true; // Mark this type as an array
 	}
 
-	// Optional: Link to a potential built-in Array class symbol
+	// Link to the built-in Array class symbol
 	@Override
 	public ClassSymbol getClassSymbol()
 	{
-		// return backingArrayClass; // Return null until a backing class is defined
-		return null;
+		return backingArrayStruct; // Return the linked struct symbol
 	}
 
 	@Override

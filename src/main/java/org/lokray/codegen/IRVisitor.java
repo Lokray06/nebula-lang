@@ -41,48 +41,51 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 	 * Creates an IRVisitor that operates on the LLVM global context.
 	 * It creates its own module and builder.
 	 */
-    public IRVisitor(SemanticAnalyzer semanticAnalyzer)
-    {
-        this.semanticAnalyzer = semanticAnalyzer;
-        this.builder = LLVMCreateBuilder();
-        this.module = LLVMModuleCreateWithName("nebula_module");
+	public IRVisitor(SemanticAnalyzer semanticAnalyzer)
+	{
+		this.semanticAnalyzer = semanticAnalyzer;
+		this.builder = LLVMCreateBuilder();
+		this.module = LLVMModuleCreateWithName("nebula_module");
 
-        BytePointer triple = LLVMGetDefaultTargetTriple();
-        LLVMTargetRef target = new LLVMTargetRef();
-        BytePointer error = new BytePointer((Pointer) null);
+		BytePointer triple = LLVMGetDefaultTargetTriple();
+		LLVMTargetRef target = new LLVMTargetRef();
+		BytePointer error = new BytePointer((Pointer) null);
 
-        if (LLVMGetTargetFromTriple(triple, target, error) != 0) {
-            Debug.logError("Failed to get LLVM target from triple: " + error.getString());
-            LLVMDisposeMessage(error);
-        } else {
-            LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
-                    target,
-                    triple,
-                    new BytePointer("generic"),
-                    new BytePointer(""),
-                    LLVMCodeGenLevelDefault,
-                    LLVMRelocDefault,
-                    LLVMCodeModelDefault
-            );
+		if (LLVMGetTargetFromTriple(triple, target, error) != 0)
+		{
+			Debug.logError("Failed to get LLVM target from triple: " + error.getString());
+			LLVMDisposeMessage(error);
+		}
+		else
+		{
+			LLVMTargetMachineRef machine = LLVMCreateTargetMachine(
+					target,
+					triple,
+					new BytePointer("generic"),
+					new BytePointer(""),
+					LLVMCodeGenLevelDefault,
+					LLVMRelocDefault,
+					LLVMCodeModelDefault
+			);
 
-            // 1. Create the Data Layout object (you did this)
-            LLVMTargetDataRef dataLayoutRef = LLVMCreateTargetDataLayout(machine);
+			// 1. Create the Data Layout object (you did this)
+			LLVMTargetDataRef dataLayoutRef = LLVMCreateTargetDataLayout(machine);
 
-            // 2. Get the string representation from the object
-            BytePointer dataLayoutString = LLVMCopyStringRepOfTargetData(dataLayoutRef);
+			// 2. Get the string representation from the object
+			BytePointer dataLayoutString = LLVMCopyStringRepOfTargetData(dataLayoutRef);
 
-            // 3. Set the layout on the module using the string
-            LLVMSetDataLayout(module, dataLayoutString);
+			// 3. Set the layout on the module using the string
+			LLVMSetDataLayout(module, dataLayoutString);
 
-            // 4. Clean up ALL resources
-            LLVMDisposeMessage(dataLayoutString); // Free the string copy
-            LLVMDisposeTargetData(dataLayoutRef); // Free the data layout object
-            LLVMDisposeTargetMachine(machine);    // Free the target machine
-        }
-        LLVMDisposeMessage(triple);
+			// 4. Clean up ALL resources
+			LLVMDisposeMessage(dataLayoutString); // Free the string copy
+			LLVMDisposeTargetData(dataLayoutRef); // Free the data layout object
+			LLVMDisposeTargetMachine(machine);    // Free the target machine
+		}
+		LLVMDisposeMessage(triple);
 
-        scopedValues.push(new HashMap<>());
-    }
+		scopedValues.push(new HashMap<>());
+	}
 
 	@Override
 	public LLVMValueRef visitMethodDeclaration(NebulaParser.MethodDeclarationContext ctx)
@@ -1165,14 +1168,15 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			char val = text.length() > 2 ? text.charAt(1) : 0; // Simplified
 			if (text.length() == 4 && text.startsWith("'\\"))
 			{ // e.g., '\n'
-                // Add more escapes as needed
-                val = switch (text.charAt(2)) {
-                    case 'n' -> '\n';
-                    case 't' -> '\t';
-                    case '\\' -> '\\';
-                    case '\'' -> '\'';
-                    default -> val;
-                };
+				// Add more escapes as needed
+				val = switch (text.charAt(2))
+				{
+					case 'n' -> '\n';
+					case 't' -> '\t';
+					case '\\' -> '\\';
+					case '\'' -> '\'';
+					default -> val;
+				};
 			}
 			return LLVMConstInt(LLVMInt8Type(), val, 0); // Assuming char is i8
 		}
@@ -1363,70 +1367,82 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 				argOffset = 1;
 			}
 
-            // --- INTRINSIC ARRAY METHOD HANDLING ---
-            // Check if this is a special compiler-known method on nebula.core.Array
-            if (methodSymbol.getEnclosingScope() instanceof ClassSymbol cs && cs.getFqn().equals("nebula.core.Array")) {
-                LLVMValueRef thisObject = visit(ctx.primary()); // Get the nebula_Array_t*
-                LLVMTypeRef arrayDescType = TypeConverter.getArrayDescStructType();
+			// --- INTRINSIC ARRAY METHOD HANDLING ---
+			// Check if this is a special compiler-known method on nebula.core.Array
+			if (methodSymbol.getEnclosingScope() instanceof ClassSymbol cs && cs.getFqn().equals("nebula.core.Array"))
+			{
+				LLVMValueRef thisObject = visit(ctx.primary()); // Get the nebula_Array_t*
+				LLVMTypeRef arrayDescType = TypeConverter.getArrayDescStructType();
 
-                // 1. --- Handle 'arr.length' (which is a call to 'get_length') ---
-                if (methodSymbol.getName().equals("get_length")) {
-                    Debug.logDebug("IR (Intrinsic): Handling arr.length property");
-                    LLVMValueRef descStruct = LLVMBuildLoad2(builder, arrayDescType, thisObject, "arr.desc.load");
-                    LLVMValueRef sizeVal = LLVMBuildExtractValue(builder, descStruct, 1, "arr.size");
-                    return sizeVal;
-                }
+				// 1. --- Handle 'arr.length' (which is a call to 'get_length') ---
+				if (methodSymbol.getName().equals("get_length"))
+				{
+					Debug.logDebug("IR (Intrinsic): Handling arr.length property");
+					LLVMValueRef descStruct = LLVMBuildLoad2(builder, arrayDescType, thisObject, "arr.desc.load");
+					LLVMValueRef sizeVal = LLVMBuildExtractValue(builder, descStruct, 1, "arr.size");
+					return sizeVal;
+				}
 
-                // 2. --- Get arguments (shared for elementAt and setElementAt) ---
-                NebulaParser.ArgumentListContext argListCtx = null;
-                for (int i = 0; i < ctx.getChildCount(); i++) {
-                    if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext) {
-                        argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
-                        break;
-                    }
-                }
-                if (argListCtx == null || argListCtx.expression().isEmpty()) {
-                    Debug.logError("IR Error: Array method call missing arguments: " + ctx.getText());
-                    return null;
-                }
+				// 2. --- Get arguments (shared for elementAt and setElementAt) ---
+				NebulaParser.ArgumentListContext argListCtx = null;
+				for (int i = 0; i < ctx.getChildCount(); i++)
+				{
+					if (ctx.getChild(i) instanceof NebulaParser.ArgumentListContext)
+					{
+						argListCtx = (NebulaParser.ArgumentListContext) ctx.getChild(i);
+						break;
+					}
+				}
+				if (argListCtx == null || argListCtx.expression().isEmpty())
+				{
+					Debug.logError("IR Error: Array method call missing arguments: " + ctx.getText());
+					return null;
+				}
 
-                // Get index (arg 0)
-                LLVMValueRef indexVal = visit(argListCtx.expression(0));
-                indexVal = buildCast(builder, indexVal, LLVMInt32Type(), "idx_cast");
+				// Get index (arg 0)
+				LLVMValueRef indexVal = visit(argListCtx.expression(0));
+				indexVal = buildCast(builder, indexVal, LLVMInt32Type(), "idx_cast");
 
-                // 3. --- Get Element Pointer (shared logic) ---
-                Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
-                if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType)) {
-                    Debug.logError("IR Error: Cannot determine element type for array access: " + ctx.primary().getText());
-                    return null;
-                }
-                LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(baseArrayType.getElementType());
-                LLVMValueRef elementPtr = getArrayElementPointer(thisObject, indexVal, elementLLVMType);
-                if (elementPtr == null) return null; // Error handled in helper
+				// 3. --- Get Element Pointer (shared logic) ---
+				Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
+				if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType))
+				{
+					Debug.logError("IR Error: Cannot determine element type for array access: " + ctx.primary().getText());
+					return null;
+				}
+				LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(baseArrayType.getElementType());
+				LLVMValueRef elementPtr = getArrayElementPointer(thisObject, indexVal, elementLLVMType);
+				if (elementPtr == null)
+				{
+					return null; // Error handled in helper
+				}
 
-                // 4. --- Handle 'arr.elementAt(i)' ---
-                if (methodSymbol.getName().equals("elementAt")) {
-                    Debug.logDebug("IR (Intrinsic): Handling arr.elementAt(i)");
-                    // elementAt returns the VALUE (R-Value), so we must load it.
-                    return LLVMBuildLoad2(builder, elementLLVMType, elementPtr, "arr.elem.load");
-                }
+				// 4. --- Handle 'arr.elementAt(i)' ---
+				if (methodSymbol.getName().equals("elementAt"))
+				{
+					Debug.logDebug("IR (Intrinsic): Handling arr.elementAt(i)");
+					// elementAt returns the VALUE (R-Value), so we must load it.
+					return LLVMBuildLoad2(builder, elementLLVMType, elementPtr, "arr.elem.load");
+				}
 
-                // 5. --- Handle 'arr.setElementAt(i, v)' ---
-                if (methodSymbol.getName().equals("setElementAt")) {
-                    Debug.logDebug("IR (Intrinsic): Handling arr.setElementAt(i, v)");
-                    if (argListCtx.expression().size() < 2) {
-                        Debug.logError("IR Error: Array.setElementAt call missing value argument: " + ctx.getText());
-                        return null;
-                    }
-                    // Get value (arg 1)
-                    LLVMValueRef valueToStore = visit(argListCtx.expression(1));
-                    valueToStore = buildCast(builder, valueToStore, elementLLVMType, "val_cast");
+				// 5. --- Handle 'arr.setElementAt(i, v)' ---
+				if (methodSymbol.getName().equals("setElementAt"))
+				{
+					Debug.logDebug("IR (Intrinsic): Handling arr.setElementAt(i, v)");
+					if (argListCtx.expression().size() < 2)
+					{
+						Debug.logError("IR Error: Array.setElementAt call missing value argument: " + ctx.getText());
+						return null;
+					}
+					// Get value (arg 1)
+					LLVMValueRef valueToStore = visit(argListCtx.expression(1));
+					valueToStore = buildCast(builder, valueToStore, elementLLVMType, "val_cast");
 
-                    // Store the value
-                    LLVMBuildStore(builder, valueToStore, elementPtr);
-                    return null; // void return
-                }
-            }
+					// Store the value
+					LLVMBuildStore(builder, valueToStore, elementPtr);
+					return null; // void return
+				}
+			}
 
 			// Locate argument list child if present
 			NebulaParser.ArgumentListContext argListCtx = null;
@@ -1455,19 +1471,19 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 					int paramIdx = i + (methodSymbol.isStatic() ? 0 : 1);
 					if (paramIdx < llvmParamTypesList.size() && argValue != null)
 					{
-                        LLVMTypeRef targetType = llvmParamTypesList.get(paramIdx); // e.g., i32
-                        LLVMTypeRef argType = LLVMTypeOf(argValue);     // e.g., i32*
+						LLVMTypeRef targetType = llvmParamTypesList.get(paramIdx); // e.g., i32
+						LLVMTypeRef argType = LLVMTypeOf(argValue);     // e.g., i32*
 
-                        // *** NEW FIX: Load L-Value if R-Value is expected ***
-                        if (LLVMGetTypeKind(argType) == LLVMPointerTypeKind && LLVMGetTypeKind(targetType) != LLVMPointerTypeKind)
-                        {
-                            LLVMTypeRef pointedToType = LLVMGetElementType(argType);
-                            // Load the value from the pointer
-                            argValue = LLVMBuildLoad2(builder, pointedToType, argValue, "arg.load");
-                        }
-                        // *** END FIX ***
+						// *** NEW FIX: Load L-Value if R-Value is expected ***
+						if (LLVMGetTypeKind(argType) == LLVMPointerTypeKind && LLVMGetTypeKind(targetType) != LLVMPointerTypeKind)
+						{
+							LLVMTypeRef pointedToType = LLVMGetElementType(argType);
+							// Load the value from the pointer
+							argValue = LLVMBuildLoad2(builder, pointedToType, argValue, "arg.load");
+						}
+						// *** END FIX ***
 
-                        argValue = buildCast(builder, argValue, targetType, "arg_cast" + i);
+						argValue = buildCast(builder, argValue, targetType, "arg_cast" + i);
 					}
 					args.add(argValue);
 				}
@@ -1488,6 +1504,71 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 
 			return LLVMBuildCall2(builder, functionType, function, argsPtr, args.size(), callName.isEmpty() ? "" : callName);
+		}
+
+		// --- FIELD/PROPERTY ACCESS ---
+		// This handles cases like 'nums.len' where the *entire expression*
+		// resolves to a VariableSymbol (the 'len' field).
+		if (symbolOpt.isPresent() && symbolOpt.get() instanceof VariableSymbol varSymbol)
+		{
+			// This handles simple `varName` access, which should be done in visitPrimary.
+			// But if there's a dot, it's field access.
+			if (ctx.DOT_SYM().size() == 0)
+			{
+				// Not a field access, it's a simple variable. Let visitPrimary handle it.
+				Debug.logDebug("IR (Postfix): Resolved as simple variable. Deferring to primary.");
+				return visit(ctx.primary());
+			}
+
+			Debug.logDebug("IR (Postfix): Resolved as variable/property access: " + varSymbol.getName());
+
+			// 1. Get the pointer to the base object (e.g., the 'nums' descriptor)
+			LLVMValueRef baseObjectPtr = visit(ctx.primary());
+			if (baseObjectPtr == null)
+			{
+				Debug.logError("IR Error: Base of field access is null: " + ctx.primary().getText());
+				return null;
+			}
+
+			// 2. Get the *type* of the base object (e.g., int[] for 'nums')
+			Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
+			if (baseNebulaTypeOpt.isEmpty())
+			{
+				Debug.logError("IR Error: Cannot determine base type for field access: " + ctx.primary().getText());
+				return null;
+			}
+
+			// 3. Get the LLVM struct type from the pointer (e.g., %nebula_Array_t)
+			LLVMTypeRef baseStructType = TypeConverter.getArrayDescStructType();
+			Debug.logDebug("IR (Postfix): GEPing with explicit type: " + LLVMPrintTypeToString(baseStructType));
+
+			// 4. Find the field's index in the struct.
+			// This is a simple hardcoded fix for Array.len.
+			int fieldIndex = -1;
+			ClassSymbol baseClassSymbol = baseNebulaTypeOpt.get().getClassSymbol();
+
+			// Check that baseClassSymbol is not null before calling getFqn()
+			if (baseClassSymbol != null && baseClassSymbol.getFqn().equals("nebula.core.Array") && varSymbol.getName().equals("len"))
+			{
+				fieldIndex = 1; // 0 is data, 1 is size/len
+			}
+			else
+			{
+				String fqn = (baseClassSymbol != null) ? baseClassSymbol.getFqn() : "unknown type";
+				Debug.logError("IR Error: Field index lookup not implemented for: " + fqn + "." + varSymbol.getName());
+				return null;
+			}
+
+			// 5. Generate GEP to get the address of the field
+			LLVMValueRef zero = LLVMConstInt(LLVMInt32Type(), 0, 0);
+			LLVMValueRef idx = LLVMConstInt(LLVMInt32Type(), fieldIndex, 0);
+			LLVMValueRef[] indices = {zero, idx};
+
+			LLVMValueRef fieldPtr = LLVMBuildGEP2(builder, baseStructType, baseObjectPtr, new PointerPointer<>(indices), 2, varSymbol.getName() + ".ptr");
+
+			// 6. Load and return the value from the field's address
+			LLVMTypeRef fieldLLVMType = TypeConverter.toLLVMType(varSymbol.getType());
+			return LLVMBuildLoad2(builder, fieldLLVMType, fieldPtr, varSymbol.getName() + ".load");
 		}
 
 		// ---------- ARRAY ELEMENT ACCESS: arr[idx] ----------
@@ -1515,17 +1596,18 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 			}
 			indexVal = buildCast(builder, indexVal, LLVMInt32Type(), "idx_cast"); // assume i32 index
 
-            // 3. --- Get Element Pointer (using new helper) ---
-            Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
-            if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType)) {
-                Debug.logError("IR Error: Cannot determine element type for array access: " + ctx.primary().getText());
-                return null;
-            }
-            LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(baseArrayType.getElementType());
-            LLVMValueRef elementPtr = getArrayElementPointer(baseDescPtr, indexVal, elementLLVMType);
+			// 3. --- Get Element Pointer (using new helper) ---
+			Optional<Type> baseNebulaTypeOpt = semanticAnalyzer.getResolvedType(ctx.primary());
+			if (baseNebulaTypeOpt.isEmpty() || !(baseNebulaTypeOpt.get() instanceof ArrayType baseArrayType))
+			{
+				Debug.logError("IR Error: Cannot determine element type for array access: " + ctx.primary().getText());
+				return null;
+			}
+			LLVMTypeRef elementLLVMType = TypeConverter.toLLVMType(baseArrayType.getElementType());
+			LLVMValueRef elementPtr = getArrayElementPointer(baseDescPtr, indexVal, elementLLVMType);
 
-            Debug.logDebug("IR (Postfix): Array access returning element pointer.");
-            return elementPtr;
+			Debug.logDebug("IR (Postfix): Array access returning element pointer.");
+			return elementPtr;
 		}
 
 		// ---------- POSTFIX ++ / -- ----------
@@ -1685,8 +1767,8 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		// 1) Literal: delegate
 		if (ctx.literal() != null)
 		{
-            return visit(ctx.literal());
-        }
+			return visit(ctx.literal());
+		}
 
 		// 2) Parenthesized expression: ( expr )
 		if (ctx.expression() != null)
@@ -2779,96 +2861,115 @@ public class IRVisitor extends NebulaParserBaseVisitor<LLVMValueRef>
 		return LLVMFunctionType(returnType, new PointerPointer<>(llvmParamTypes), paramTypes.size(), 0);
 	}
 
-    /**
-     * Reusable helper to generate the IR for getting an element pointer (GEP)
-     * from an array descriptor, including bounds checking.
-     * @param baseDescPtr Pointer to the nebula_Array_t descriptor (nebula_Array_t*)
-     * @param indexVal The index to access (i32)
-     * @param elementLLVMType The *LLVM type* of the element (e.g., i8, i32, %nebula_string*)
-     * @return The pointer to the element (e.g., i8*, i32*, %nebula_string**), or null on error.
-     */
-    private LLVMValueRef getArrayElementPointer(LLVMValueRef baseDescPtr, LLVMValueRef indexVal, LLVMTypeRef elementLLVMType)
-    {
-        Debug.logDebug("-> Entering getArrayElementPointer");
-        LLVMTypeRef arrayPointerType = LLVMTypeOf(baseDescPtr);
-        LLVMTypeRef arrayDescriptorType = LLVMGetElementType(arrayPointerType);
-        System.out.println("Array descriptor type: " + arrayDescriptorType);
+	/**
+	 * Reusable helper to generate the IR for getting an element pointer (GEP)
+	 * from an array descriptor, including bounds checking.
+	 *
+	 * @param baseDescPtr     Pointer to the nebula_Array_t descriptor (nebula_Array_t*)
+	 * @param indexVal        The index to access (i32)
+	 * @param elementLLVMType The *LLVM type* of the element (e.g., i8, i32, %nebula_string*)
+	 * @return The pointer to the element (e.g., i8*, i32*, %nebula_string**), or null on error.
+	 */
+	private LLVMValueRef getArrayElementPointer(LLVMValueRef baseDescPtr, LLVMValueRef indexVal, LLVMTypeRef elementLLVMType)
+	{
+		Debug.logDebug("-> Entering getArrayElementPointer");
 
-        // --- START FIX: Use GEP on the struct pointer instead of Load + ExtractValue ---
-        LLVMTypeRef i32Type = LLVMInt32Type();
-        LLVMTypeRef i8PtrType = LLVMPointerType(LLVMInt8Type(), 0);
+		// Don't infer the descriptor type; get it directly from the TypeConverter.
+		// This ensures we GEP using the *struct type*, not just 'ptr'.
+		LLVMTypeRef arrayDescriptorType = TypeConverter.getArrayDescStructType();
+		Debug.logDebug("Array descriptor type: " + LLVMPrintTypeToString(arrayDescriptorType));
 
-        // GEP indices for accessing fields of a struct pointer:
-        // Index 0: Dereference the pointer (always 0 for struct member access on a pointer)
-        // Index 1: Field index within the struct (0 for data, 1 for size)
-        LLVMValueRef zero = LLVMConstInt(i32Type, 0, 0); // i32 0
-        LLVMValueRef dataIndex = LLVMConstInt(i32Type, 0, 0); // i32 0
-        LLVMValueRef sizeIndex = LLVMConstInt(i32Type, 1, 0); // i32 1
+		LLVMTypeRef i32Type = LLVMInt32Type();
+		LLVMTypeRef i8PtrType = LLVMPointerType(LLVMInt8Type(), 0);
 
-        // 1. Get pointer to the 'data' field (Index 0)
-        // This will generate: getelementptr <aggregate type>, <pointer>, i32 0, i32 0
-        Debug.logDebug("-> GEP: Getting pointer to data field (Index 0)...");
-        LLVMValueRef[] dataIndices = {zero, dataIndex};
-        LLVMValueRef dataPtrPtr = LLVMBuildGEP2(
-                builder,
-                arrayDescriptorType, // <--- Base Type: The struct aggregate type (%nebula_Array_t)
-                baseDescPtr,         // <--- Base Pointer: Pointer to the struct (ptr %nebula_Array_t)
-                new PointerPointer<>(dataIndices),
-                2,
-                "arr.data.ptr.ptr"
-        );
+		// GEP indices for accessing fields of a struct pointer:
+		// Index 0: Dereference the pointer (always 0 for struct member access on a pointer)
+		// Index 1: Field index within the struct (0 for data, 1 for size)
+		LLVMValueRef zero = LLVMConstInt(i32Type, 0, 0); // i32 0
+		LLVMValueRef dataIndex = LLVMConstInt(i32Type, 0, 0); // i32 0
+		LLVMValueRef sizeIndex = LLVMConstInt(i32Type, 1, 0); // i32 1
 
-        // 2. Load the actual 'data' pointer (the i8* value)
-        Debug.logDebug("-> GEP: Loading data pointer...");
-        LLVMValueRef dataPtrI8 = LLVMBuildLoad2(builder, i8PtrType, dataPtrPtr, "arr.data.ptr");
+		// 1. Get pointer to the 'data' field (Index 0)
+		// This will generate: getelementptr <aggregate type>, <pointer>, i32 0, i32 0
+		Debug.logDebug("-> GEP: Getting pointer to data field (Index 0)...");
+		LLVMValueRef[] dataIndices = {zero, dataIndex};
+		LLVMValueRef dataPtrPtr = LLVMBuildGEP2(
+				builder,
+				arrayDescriptorType, // <--- Base Type: The struct aggregate type (%nebula_Array_t)
+				baseDescPtr,         // <--- Base Pointer: Pointer to the struct (ptr %nebula_Array_t)
+				new PointerPointer<>(dataIndices),
+				2,
+				"arr.data.ptr.ptr"
+		);
 
-        // 3. Get pointer to the 'size' field (Index 1)
-        // This will generate: getelementptr <aggregate type>, <pointer>, i32 0, i32 1
-        Debug.logDebug("-> GEP: Getting pointer to size field (Index 1)...");
-        LLVMValueRef[] sizeIndices = {zero, sizeIndex};
-        LLVMValueRef sizePtr = LLVMBuildGEP2(
-                builder,
-                arrayDescriptorType, // <--- Base Type: The struct aggregate type (%nebula_Array_t)
-                baseDescPtr,         // <--- Base Pointer: Pointer to the struct (ptr %nebula_Array_t)
-                new PointerPointer<>(sizeIndices),
-                2,
-                "arr.size.ptr"
-        );
+		// 2. Load the actual 'data' pointer (the i8* value)
+		Debug.logDebug("-> GEP: Loading data pointer...");
+		LLVMValueRef dataPtrI8 = LLVMBuildLoad2(builder, i8PtrType, dataPtrPtr, "arr.data.ptr");
 
-        // 4. Load the 'size' value
-        Debug.logDebug("-> GEP: Loading size value...");
-        LLVMValueRef sizeVal = LLVMBuildLoad2(builder, i32Type, sizePtr, "arr.size");
+		// 3. Get pointer to the 'size' field (Index 1)
+		// This will generate: getelementptr <aggregate type>, <pointer>, i32 0, i32 1
+		Debug.logDebug("-> GEP: Getting pointer to size field (Index 1)...");
+		LLVMValueRef[] sizeIndices = {zero, sizeIndex};
+		LLVMValueRef sizePtr = LLVMBuildGEP2(
+				builder,
+				arrayDescriptorType, // <--- Base Type: The struct aggregate type (%nebula_Array_t)
+				baseDescPtr,         // <--- Base Pointer: Pointer to the struct (ptr %nebula_Array_t)
+				new PointerPointer<>(sizeIndices),
+				2,
+				"arr.size.ptr"
+		);
 
-        // Bounds Check Logic (Remains the same)
-        Debug.logDebug("-> GEP: Building bounds check...");
-        LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder);
-        LLVMValueRef function = LLVMGetBasicBlockParent(currentBlock);
-        LLVMBasicBlockRef errorBlock = LLVMAppendBasicBlock(function, "bounds.err");
-        LLVMBasicBlockRef okBlock = LLVMAppendBasicBlock(function, "bounds.ok");
+		// 4. Load the 'size' value
+		Debug.logDebug("-> GEP: Loading size value...");
+		LLVMValueRef sizeVal = LLVMBuildLoad2(builder, i32Type, sizePtr, "arr.size");
 
-        // Check: index < size
-        LLVMValueRef boundsCheck = LLVMBuildICmp(builder, LLVMIntULT, indexVal, sizeVal, "bounds.check");
-        LLVMBuildCondBr(builder, boundsCheck, okBlock, errorBlock);
+		// Bounds Check Logic (Remains the same)
+		Debug.logDebug("-> GEP: Building bounds check...");
+		LLVMBasicBlockRef currentBlock = LLVMGetInsertBlock(builder); //
+		LLVMValueRef function = LLVMGetBasicBlockParent(currentBlock);
 
-        // Error Path: Unreachable for now (can be replaced by a runtime error call later)
-        LLVMPositionBuilderAtEnd(builder, errorBlock);
-        LLVMBuildUnreachable(builder);
+		// Insert new blocks *after* the current block, but before
+		// any subsequent blocks (like loop.exit).
+		LLVMBasicBlockRef nextBlock = LLVMGetNextBasicBlock(currentBlock);
+		LLVMBasicBlockRef errorBlock;
+		LLVMBasicBlockRef okBlock;
 
-        // OK Path: Continue
-        LLVMPositionBuilderAtEnd(builder, okBlock);
+		if (nextBlock != null)
+		{
+			// Insert before the next block
+			errorBlock = LLVMInsertBasicBlock(nextBlock, "bounds.err");
+			okBlock = LLVMInsertBasicBlock(nextBlock, "bounds.ok");
+		}
+		else
+		{
+			// We are at the end of the function, so just append
+			errorBlock = LLVMAppendBasicBlock(function, "bounds.err"); //
+			okBlock = LLVMAppendBasicBlock(function, "bounds.ok"); //
+		}
 
-        // Final GEP Logic (Remains the same)
-        Debug.logDebug("-> GEP: Bitcasting data ptr...");
-        // Cast i8* to ElementType*
-        LLVMTypeRef elementPtrType = LLVMPointerType(elementLLVMType, 0);
-        LLVMValueRef dataPtrTyped = LLVMBuildBitCast(builder, dataPtrI8, elementPtrType, "arr.data.ptr.typed");
+		// Check: index < size
+		LLVMValueRef boundsCheck = LLVMBuildICmp(builder, LLVMIntULT, indexVal, sizeVal, "bounds.check");
+		LLVMBuildCondBr(builder, boundsCheck, okBlock, errorBlock);
 
-        LLVMValueRef[] indices = {indexVal};
-        Debug.logDebug("-> GEP: Building GEP instruction...");
-        // GEP calculates the address of the element: BaseAddress + Index * SizeOf(ElementType)
-        LLVMValueRef elementPtr = LLVMBuildGEP2(builder, elementLLVMType, dataPtrTyped, new PointerPointer<>(indices), 1, "arr.elem.ptr");
+		// Error Path: Unreachable for now (can be replaced by a runtime error call later)
+		LLVMPositionBuilderAtEnd(builder, errorBlock);
+		LLVMBuildUnreachable(builder);
 
-        Debug.logDebug("-> Exiting getArrayElementPointer");
-        return elementPtr;
-    }
+		// OK Path: Continue
+		LLVMPositionBuilderAtEnd(builder, okBlock);
+
+		// Final GEP Logic (Remains the same)
+		Debug.logDebug("-> GEP: Bitcasting data ptr...");
+		// Cast i8* to ElementType*
+		LLVMTypeRef elementPtrType = LLVMPointerType(elementLLVMType, 0);
+		LLVMValueRef dataPtrTyped = LLVMBuildBitCast(builder, dataPtrI8, elementPtrType, "arr.data.ptr.typed");
+
+		LLVMValueRef[] indices = {indexVal};
+		Debug.logDebug("-> GEP: Building GEP instruction...");
+		// GEP calculates the address of the element: BaseAddress + Index * SizeOf(ElementType)
+		LLVMValueRef elementPtr = LLVMBuildGEP2(builder, elementLLVMType, dataPtrTyped, new PointerPointer<>(indices), 1, "arr.elem.ptr");
+
+		Debug.logDebug("-> Exiting getArrayElementPointer");
+		return elementPtr;
+	}
 }
