@@ -22,9 +22,9 @@ Compilation Pipeline
 
 Nebula is a compiler that leverages the LLVM toolchain. The compilation process consists of three main stages:
 
-1.  **Nebula Source (.neb)**: The developer writes application code using Nebula's high-level syntax.
+1.  **Nebula Source (`.neb`)**: The developer writes application code using Nebula's high-level syntax.
     
-2.  **The Nebula Compiler**: The compiler parses, type-checks, and analyzes the .neb files. It then generates semantically equivalent, optimized LLVM IR.
+2.  **The Nebula Compiler**: The compiler parses, type-checks, and analyzes the `.neb` files. It then generates semantically equivalent, optimized LLVM IR.
     
 3.  **LLVM Backend**: The LLVM backend processes the intermediate representation, performing further optimizations and generating a native executable for the specified target platform (e.g., x86-64, ARM).
     
@@ -46,23 +46,23 @@ The following sections detail some of Nebula's primary language features.
         
     *   **Traits:** Defines shared behavior that both class and struct types can implement.
         
-    *   **Properties:** C#-style get/set syntax for clean encapsulation.
+    *   **Properties:** C#-style `get`/`set` syntax for clean encapsulation.
         
 *   **Strong Type System**
     
     *   **Explicit Static Typing:** All types must be explicitly declared (no var). This catches errors at compile-time and improves code clarity.
         
-    *   **Primitive Types:** Explicit-width types like int32, uint64, float, double, etc.
+    *   **Primitive Types:** Explicit-width types like `int32`, `uint64`, `float`, `double`, etc.
         
-    *   **Explicit Casting:** Use (type)value syntax for safe, explicit type conversions.
+    *   **Explicit Casting:** Use `(type)value` syntax for safe, explicit type conversions.
         
 *   **Flexible Control Flow**
     
-    *   **Standard Loops (for, while):** Traditional C-style for loops and while loops.
+    *   **Standard Loops (`for`, `while`):** Traditional C-style for loops and while loops.
         
     *   **foreach:** A simple foreach (type item in collection) loop for easy iteration.
         
-    *   **Simplified for Loops:** Syntactic sugar like for (i < 10) (iterates 0-9) and for (k = 5 >= 1) (iterates 5-1) for common patterns.
+    *   **Simplified for Loops:** Syntactic sugar like for `(i < 10)` (iterates 0-9) and for `(k = 5 >= 1)` (iterates 5-1) for common patterns.
         
     *   **switch:** A powerful switch statement that supports pattern matching.
         
@@ -70,19 +70,17 @@ The following sections detail some of Nebula's primary language features.
     
     *   **Result ADT:** All recoverable errors are handled via a standard library Result type, which can be either Ok(T) or Err(E).
         
-    *   **? Propagation:** Use the ? operator to cleanly propagate errors up the call stack.
-        
     *   **Pattern Matching:** Use switch to exhaustively and safely handle all possible Ok or Err variants.
         
 *   **Modern Language Constructs**
     
-    *   **Concurrency (async/await):** Built-in support for structured, non-blocking I/O using the async/await pattern.
+    *   **Concurrency (`async`/`await`):** Built-in support for structured, non-blocking I/O using the async/await pattern.
         
-    *   **Tuples (Planned):** Group and return multiple values, with support for named elements (e.g., (float Sum, uint Count)).
+    *   **Tuples:** Group and return multiple values, with support for named elements (e.g., `(float Sum, uint Count)`).
         
-    *   **Named & Optional Parameters (Planned):** C#-style optional parameters with default values and named arguments for clear function calls.
+    *   **Named & Optional Parameters:** C#-style optional parameters with default values and named arguments for clear function calls.
         
-    *   **String Interpolation (Planned):** Use $-prefixed strings to embed expressions: println($"Value is {x}").
+    *   **String Interpolation:** Use '$' prefixed strings to embed expressions: `println($"Value is {x}")`.
         
 
 Getting Started (Coming Soon!)
