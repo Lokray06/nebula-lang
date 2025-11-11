@@ -332,21 +332,14 @@ public class SemanticAnalyzer
 		{
 			ParseTree key = entry.getKey();
 			Interval kint = key.getSourceInterval();
-			// --- START NEW LOGGING ---
-			// Uncomment below for VERY verbose logging if needed
 			// Debug.logDebug("    -> Comparing target " + target + " with key " + key.getText() + " interval " + kint + " (Key Hash: " + key.hashCode() + ")");
-			// --- END NEW LOGGING ---
 			if (kint != null && kint.equals(target))
 			{
-				// --- START NEW LOGGING ---
-				Debug.logDebug("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
-				// --- END NEW LOGGING ---
+				// Debug.logDebug("    -> Found symbol via interval fallback: " + entry.getValue() + " (Matching Key Hash: " + key.hashCode() + ")");
 				return Optional.ofNullable(entry.getValue());
 			}
 		}
-		// --- START NEW LOGGING ---
 		Debug.logDebug("  -> Interval fallback FAILED.");
-		// --- END NEW LOGGING ---
 		return Optional.empty();
 	}
 

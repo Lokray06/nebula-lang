@@ -408,6 +408,11 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			return null;
 		}
 
+		// ----- START FIX: Add missing 'note' call -----
+		// This ensures the IRVisitor can resolve this constructor node.
+		note(ctx, ctorOpt.get());
+		// ----- END FIX -----
+
 		currentMethod = ctorOpt.get();
 		currentScope = currentMethod;
 
@@ -423,6 +428,43 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 		currentScope = currentScope.getEnclosingScope();
 		currentMethod = null;
 		return null;
+	}
+
+	@Override
+	public Type visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
+	{
+		// Resolve the type of the field(s)
+		Type fieldType = resolveType(ctx.type());
+		note(ctx.type(), fieldType); // Good practice to note the type context too
+
+		for (var declarator : ctx.variableDeclarator())
+		{
+			String varName = declarator.ID().getText();
+			// Resolve the symbol created by SymbolTableBuilder from the current class scope
+			Optional<Symbol> symbolOpt = currentScope.resolveLocally(varName);
+
+			if (symbolOpt.isPresent() && symbolOpt.get() instanceof VariableSymbol)
+			{
+				// This ensures the IRVisitor can resolve "zero=newVector3()"
+				note(declarator, symbolOpt.get());
+			}
+			else
+			{
+				// This should not happen if SymbolTableBuilder ran correctly
+				logError(declarator.ID().getSymbol(), "Internal error: Could not find symbol for field '" + varName + "'.");
+			}
+
+			// Now, type-check the initializer if it exists
+			if (declarator.expression() != null)
+			{
+				Type initializerType = visit(declarator.expression());
+				if (!initializerType.isAssignableTo(fieldType))
+				{
+					logError(declarator.expression().start, "Incompatible types in field initialization: cannot assign '" + initializerType.getName() + "' to '" + fieldType.getName() + "'.");
+				}
+			}
+		}
+		return PrimitiveType.VOID; // Return void
 	}
 
 	@Override
@@ -836,24 +878,6 @@ public class TypeCheckVisitor extends NebulaParserBaseVisitor<Type>
 			VariableSymbol varSymbol = new VariableSymbol(varName, declaredType, false, true, false);
 			currentScope.define(varSymbol);
 			note(declarator, varSymbol);
-		}
-		return PrimitiveType.VOID;
-	}
-
-	@Override
-	public Type visitFieldDeclaration(NebulaParser.FieldDeclarationContext ctx)
-	{
-		for (var declarator : ctx.variableDeclarator())
-		{
-			if (declarator.expression() != null)
-			{
-				Type fieldType = resolveType(ctx.type());
-				Type initializerType = visit(declarator.expression());
-				if (!initializerType.isAssignableTo(fieldType))
-				{
-					logError(declarator.expression().start, "Incompatible types in field initialization: cannot assign '" + initializerType.getName() + "' to '" + fieldType.getName() + "'.");
-				}
-			}
 		}
 		return PrimitiveType.VOID;
 	}
